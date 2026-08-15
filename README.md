@@ -51,11 +51,11 @@ If your assistant doesn't have a memory yet, pair this with [ai-memory-vault](ht
 
 Tap (quick pinch) opens and closes. Pinch-drag moves. Hold still while carrying to rotate in 3D. Two hands scale. Flick to throw. **Clap** — palms together, fingers up — sweeps the board clean. **The claw**: flash your hand open, claw, aim at something across the screen, let it strain and shake for two seconds, then snap the claw shut — it rips through the air into your hand. An empty pinch dragged sideways scrubs a 3D model's exploded view apart and back together.
 
-Every threshold was tuned on a real hand across weeks of live use. The full cheat sheet is on the board: `Getting Started → The Gestures`.
+Every threshold was tuned on a real hand across weeks of live use — and because the gates measure hand *shape* as ratios, not size, they hold at any camera distance. The full cheat sheet is on the board: `Getting Started → The Gestures`. If a gesture ever misfires for your hand or setup, [TROUBLESHOOTING.md](TROUBLESHOOTING.md) ships the tuning clinic: the built-in debug overlay and pose sampler, plus the exact method for your AI to fit the gates to *your* hand.
 
 ## Streaming / recording (advanced)
 
-Two pages, one scene: the tracker page owns your camera; `stage.html?role=render` is a truly transparent mirror of it, built for an OBS browser source — the glass composites over your camera feed with real alpha. `&cursors=0` hides the finger rings (bare-hands sorcery), `&ss=2` renders at 2× for razor-sharp cards. Details in the sample notes' Field Guide.
+Two pages, one scene: the tracker page owns your camera; `stage.html?role=render` is a truly transparent mirror of it, built for an OBS browser source — the glass composites over your camera feed with real alpha. `&cursors=0` hides the finger rings (bare-hands sorcery), `&ss=2` renders at 2× for razor-sharp cards, and `?portrait=1` on the tracker flips the whole rig to vertical 9:16 for Shorts and TikTok. `?res=3840x2160` bumps the tracker's capture for a 4K self-view (`1280x720` rescues slow machines) — in an OBS rig your broadcast camera is OBS's own source, so tracking happily stays at the default. Details in the sample notes' Field Guide.
 
 ## Credits
 

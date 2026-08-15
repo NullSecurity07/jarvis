@@ -16,5 +16,7 @@ Drop the render URL into an OBS **browser source** over your camera source and O
 - `&cursors=0` — hide the finger rings from the broadcast. Bare hands, maximum sorcery.
 - `&ss=2` with a 3840×2160 browser source — 2× supersampled rendering, cards stay razor sharp when stretched.
 - `&mirror=1` — if your OBS camera source is mirrored, this turns off the render page's default flip.
+- `?portrait=1` on the **tracker** — vertical mode: the camera negotiates a 9:16 capture for Shorts/TikTok framing. Shape the tracker window tall to match, and use a 9:16 OBS canvas for the render source — with `&ss=3` instead of 2 (field-tested: the vertical composition needs the extra supersample; browser source at 3240×5760).
+- `?res=WxH` on the **tracker** — capture resolution (default 1920x1080). Higher buys self-view sharpness, not tracking accuracy; lower (`1280x720`) buys fps on slow machines. Composes with `?portrait=1`, which swaps the dimensions.
 
 The render page flips X by default because OBS shows cameras un-mirrored while the tracker works in selfie space — reach left, and the cards go left on the broadcast too.

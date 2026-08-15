@@ -243,6 +243,22 @@ import { HandLandmarker, FilesetResolver } from
 // the key — keying green ate the cursor on the first OBS test, 2026-08-07).
 // ?cam=<label substring> picks the tracking camera; C cycles cameras live.
 const Q = new URLSearchParams(location.search);
+// ?res=WxH — capture resolution (default 1920x1080, the tracking sweet
+// spot: MediaPipe downscales every frame to its model input anyway, so
+// higher res buys self-view sharpness, never accuracy — and costs fps
+// on weak machines; 1280x720 is the low-end saver, 3840x2160 the 4K
+// self-view). Capture res ≠ broadcast res: in an OBS rig the audience
+// sees OBS's own camera source; this only shapes the tracker's sensor.
+// ?portrait=1 — request the vertical capture instead of coercing the
+// camera into landscape (a camera flipped to portrait negotiates its
+// 9:16 mode). Composes with ?res=: portrait swaps the dimensions.
+// Everything downstream is aspect-agnostic (fractions + cover-fit):
+// shape the tracker WINDOW to match, 9:16 OBS canvas for the render.
+const PORTRAIT = Q.get("portrait") === "1";
+const RES = (() => {
+  const m = /^(\d{3,4})x(\d{3,4})$/i.exec(Q.get("res") || "");
+  return m ? [+m[1], +m[2]] : [1920, 1080];
+})();
 let MODE = Q.get("mode") || "mirror";
 if (MODE === "greenkey") { MODE = "key"; Q.set("key", "green"); }   // back-compat
 if (MODE === "overlay") {
@@ -1407,7 +1423,9 @@ let camDevices = [], camIdx = -1;
 
 async function startCam(deviceId) {
   if (cam.srcObject) cam.srcObject.getTracks().forEach(t => t.stop());
-  const video = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  const IW = PORTRAIT ? Math.min(...RES) : Math.max(...RES);
+  const IH = PORTRAIT ? Math.max(...RES) : Math.min(...RES);
+  const video = { width: { ideal: IW }, height: { ideal: IH } };
   if (deviceId) video.deviceId = { exact: deviceId };
   let stream = null;
   try {
@@ -1424,7 +1442,7 @@ async function startCam(deviceId) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: { deviceId: { exact: d.deviceId },
-                   width: { ideal: 1920 }, height: { ideal: 1080 } },
+                   width: { ideal: IW }, height: { ideal: IH } },
           audio: false });
         break;
       } catch (e2) {}
