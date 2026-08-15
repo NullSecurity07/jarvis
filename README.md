@@ -6,6 +6,10 @@ Move things on your screen with your bare hands. barehands turns your webcam int
 
 And it's a body waiting for a brain: wire in your AI and the on-screen ring becomes its face, while two small scripts give it hands and eyes on your board. Free to use, share, and build on — just not to resell (see LICENSE).
 
+**Watch it in action:**
+
+[![barehands demo video](https://img.youtube.com/vi/cV02finVi4o/maxresdefault.jpg)](https://youtu.be/cV02finVi4o)
+
 ## Run it (nothing needed)
 
 ```
