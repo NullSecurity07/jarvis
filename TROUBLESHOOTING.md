@@ -12,6 +12,7 @@ This file is written for humans AND for AI assistants. If you're an AI helping s
 - **Filming vertical / 9:16**: add `?portrait=1` to the tracker URL (the camera negotiates 1080×1920 instead of landscape), shape the tracker's Chrome window roughly 9:16 tall, and give the OBS render source a 9:16 canvas. Field note: vertical wants `&ss=3` (not 2) to stay sharp; browser source at 3240×5760 on a 1080×1920 canvas.
 - **Choppy / low fps on a slow machine**: add `?res=1280x720` to the tracker URL: hand tracking loses nothing (MediaPipe downscales every frame to its model input regardless), and the lighter frames buy back fps. The same knob goes up too: `?res=3840x2160` for a 4K self-view on machines that can carry it.
 - **A file I dropped in doesn't show up**: press **R** on the tracker (re-reads all folders from disk), or tap the ring → the orb again.
+- **Running on Windows:** launch with `python server.py` (python3 is the Mac and Linux name). The `bin/` scripts are bash; without Git Bash, use the curl equivalent from the wizard's Phase 4b, or have your AI adapt them.
 - **Board commands return 400**: the file isn't inside `media/` (the airlock only stages its own contents), or the action isn't on the server's allowlist.
 
 ## The instruments

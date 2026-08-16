@@ -25,7 +25,7 @@ Work through the phases in order. One question at a time; wait for each answer. 
 
 1. Confirm you are running inside the repo folder (it contains `server.py`, `stage.html`, `barehands.json`). If not, ask the person to `cd` there and restart.
 2. Check `python3 --version` (any Python 3.9+ is fine; the server is stdlib-only, nothing to install).
-3. Start the server: `python3 server.py` (run it in the background). It prints the URL.
+3. Start the server: `python3 server.py` (`python server.py` on Windows; run it in the background). It prints the URL.
 4. Tell them: open **http://127.0.0.1:8794/stage.html** in **Chrome** (Chrome's hand tracking is the proven path), allow the camera when asked, and wave a hand. A cursor ring should follow their fingers, and the assistant ring should be breathing on the left.
 5. Wait for them to confirm they see it. If the camera fails: the page needs a camera-equipped machine and Chrome; `C` cycles cameras if the wrong one opened. The first load needs internet (the hand-tracking model and 3D library load from Google's and jsdelivr's CDNs, then cache).
 
@@ -78,7 +78,7 @@ Ask: **"Want your AI wired in, so the ring reflects it working, and it can put t
 }
 ```
 
-From the next session on, the ring spins up the moment they send a prompt and settles when the work is done. (Any other assistant wires in the same way: write `idle`/`listening`/`thinking`/`speaking` to `state/state`; optionally `state/mood.json` and `state/wave.json`; the format is documented at the top of `server.py`.)
+On Windows, adapt the hook commands to the shell (for example `cmd /c echo thinking> REPO/state/state`; the server strips whitespace, so echo's trailing space is harmless). From the next session on, the ring spins up the moment they send a prompt and settles when the work is done. (Any other assistant wires in the same way: write `idle`/`listening`/`thinking`/`speaking` to `state/state`; optionally `state/mood.json` and `state/wave.json`; the format is documented at the top of `server.py`.)
 
 **4b. The board (the hands and eyes).** Add this to the CLAUDE.md (or system prompt) of the assistant they want driving the board, with REPO replaced:
 
@@ -87,6 +87,8 @@ From the next session on, the ring spins up the moment they send a prompt and se
 > - **Stage something:** `REPO/bin/board.sh '{"a":"add_card","title":"...","body":"..."}'`; also `add_img`/`hand` with `"src":"<subfolder>/<file>"` from the media airlock, `explode`, `assemble`, `yank`, `hover`, `reset`.
 > - **Look at the board:** `REPO/bin/board-state.sh` prints every item currently up. Run it before commenting on the board; the user moves things by hand, so never trust memory.
 > - **The airlock law:** only files inside `REPO/media/` can stage. To show a new image, copy it into `media/misc/` first, then stage it.
+
+On Windows, if bash is not available for board.sh, give the agent the direct call instead: `curl -X POST http://127.0.0.1:8794/cmd -H "Content-Type: application/json" -d "{\"a\":\"add_card\",\"title\":\"HELLO\"}"` (curl ships with Windows 10 and later).
 
 **4c. Prove the loop.** Have their assistant (you, if you're it) run: `bin/board.sh '{"a":"add_card","title":"HELLO","body":"your AI was here"}'`; the card should materialize on the glass in front of them. That moment is the product. Let them enjoy it.
 
