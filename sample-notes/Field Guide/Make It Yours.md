@@ -17,4 +17,4 @@ Edit the file, press **R** on the tracker, done.
 - A teaching board: annotate diagrams by hand while the AI stages the next slide
 - Wire the state files to ANY assistant: a local LLM, a home automation hub, a hotkey
 
-If you build something good, share it. The license asks only that you credit the source and don't resell it.
+If you build something good, share it. The license asks only that you credit the source and keep your own version open under the same terms.
