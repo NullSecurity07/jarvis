@@ -92,7 +92,8 @@ def orb_root(i):
 _STATE = b"{}"          # latest scene state: tracker POSTs, render GETs
 _CMDS = []              # queued board commands (your AI -> tracker)
 _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
-            "yank", "hover", "scroll_note", "widget", "explode", "assemble")
+            "yank", "hover", "scroll_note", "widget", "explode", "assemble",
+            "present")
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -137,7 +138,7 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 cmd = json.loads(body)
                 assert cmd.get("a") in _ALLOWED
-                if cmd["a"] in ("add_img", "hand", "give") and cmd.get("src"):
+                if cmd["a"] in ("add_img", "hand", "give", "present") and cmd.get("src"):
                     # THE AIRLOCK: only files really inside ./media/ ever
                     # stage — subfolders allowed, escapes 400. If the
                     # exact path misses, a UNIQUE basename match anywhere

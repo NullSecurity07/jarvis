@@ -45,6 +45,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   body:not(.on-air) .card.grabbed, body:not(.on-air) .panel.grabbed {
     box-shadow:0 12px 60px rgba(0,0,0,0.7),
       0 0 calc(44px + var(--ch)*70px) rgba(111,229,214,calc(0.35 + var(--ch)*0.55)); }
+  /* THE PRESENT spotlight: one item center stage, the rest step back */
+  .dimmed { opacity:0.22 !important; filter:saturate(0.35);
+    transition:opacity 0.35s, filter 0.35s; }
+  .presented { box-shadow:0 16px 70px rgba(0,0,0,0.65),
+      0 0 70px rgba(111,229,214,0.45); }
   /* ON-AIR (the OBS render page): backdrop-blur has nothing to sample
      in the compositor. GLASS ERA: the near-solid slabs died (Jared's
      8/13 call — "frankly more transparent") — true translucent glass,
@@ -1189,8 +1194,56 @@ function applyCmds(cmds) {
     } else if (c.a === "hover") {
       const t = findItem(c.title);
       if (t) t.anim = { k: "hover", t: 0 };
+    } else if (c.a === "present") {
+      // THE PRESENT verb: show-and-tell. Stage (or find) the thing, fly
+      // it center stage, enlarge it, dim everything else. Ends when the
+      // person grabs it, it leaves the board, or a new present/clear.
+      let t = c.title ? findItem(c.title) : null;
+      if (!t && c.src) {
+        t = isModelSrc(c.src) ? makeModel(c.src, c.title, c.mode, c.lift)
+                              : makeImage(c.src, c.title);
+      } else if (!t && c.title) {
+        t = makeCard({ title: c.title, body: c.body || "", file: c.file || "" });
+      }
+      if (t) {
+        if (!items.includes(t)) {
+          t.x = innerWidth * 0.5; t.y = innerHeight * 0.44;
+          t.el.style.opacity = "0.05";
+          items.push(t);
+        }
+        if (c.open && t.def && t.def.file) {
+          openPanel(t);
+          const p = items.filter(k => k.type === "panel").pop();
+          presentItem(p || t);
+        } else presentItem(t);
+      }
     }
   });
+}
+
+// ---- THE PRESENT machinery: one spotlit item, everything else dims.
+let presented = null;
+function presentItem(t) {
+  if (presented && presented !== t) endPresent();
+  presented = t;
+  const el = t.el;
+  // size-aware target scale: land filling roughly half the short axis
+  const w = el.offsetWidth || 320, h = el.offsetHeight || 220;
+  const s1 = Math.min(2.4, Math.max(1.25,
+    (Math.min(innerWidth, innerHeight) * 0.55) / Math.max(w, h)));
+  t.anim = { k: "present", t: 0, x0: t.x, y0: t.y, s0: t.scale || 1, s1 };
+  BEHIND.appendChild(el);                       // pop to the top, pull-catch style
+  el.classList.add("presented");
+  items.forEach(k => {
+    if (k !== t && k.el && k.el.isConnected) k.el.classList.add("dimmed");
+  });
+}
+function endPresent() {
+  if (!presented) return;
+  items.forEach(k => { if (k.el) k.el.classList.remove("dimmed"); });
+  presented.el.classList.remove("presented");
+  if (presented.anim && presented.anim.k === "present") presented.anim = null;
+  presented = null;
 }
 
 // ---- THE ORBITAL BLOOM: the board boots EMPTY except THE RING.
@@ -1797,6 +1850,9 @@ function physics(dt) {
     const k = Math.min(1, dt * 10);
     o.x += (tx - o.x) * k; o.y += (ty - o.y) * k;
   });
+  // the spotlight ends itself: a grab or the item leaving the board
+  if (presented && (!presented.el.isConnected || presented.grabbedBy.length))
+    endPresent();
   items.forEach(c => {
     if (c.anim) {                     // the assistant's agency animations
       const a = c.anim; a.t += dt;
@@ -1829,6 +1885,14 @@ function physics(dt) {
         c.hch = 0.45 + 0.35 * Math.sin(a.t * 10);
         c.hs = 1 + 0.05 * Math.sin(a.t * 6);
         if (a.t > 2.2) { c.anim = null; c.hs = 1; c.hch = 0; }
+      } else if (a.k === "present") { // THE PRESENT: fly to center stage
+        const p = Math.min(a.t / 0.45, 1);   // and grow into the spotlight
+        const e = 1 - Math.pow(1 - p, 3);
+        c.x = a.x0 + (innerWidth * 0.5 - a.x0) * e;
+        c.y = a.y0 + (innerHeight * 0.44 - a.y0) * e;
+        c.scale = a.s0 + (a.s1 - a.s0) * e;
+        c.el.style.opacity = "";
+        if (p >= 1) c.anim = null;    // the spotlight classes hold until endPresent
       } else if (a.k === "give") {    // bloom in, then hand off to the
         const p = Math.min(a.t / 0.3, 1);            // pull flight — the
         const e = 1 - Math.pow(1 - p, 3);            // delivered-INTO-

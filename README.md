@@ -47,7 +47,7 @@ One line per orb. Add more folders, rename them, point them anywhere. The `media
 **The manual way:** barehands speaks two dead-simple protocols:
 
 - **The ring is a face.** It reads tiny files in `state/`: write `thinking` (or `idle` / `listening` / `speaking`) to `state/state` and the ring reacts. No files, no problem: it idles beautifully. Claude Code users: two hooks in `settings.json` make the ring mirror your real sessions (the wizard pastes them for you).
-- **The board is a stage.** `bin/board.sh '{"a":"add_card","title":"HELLO"}'` and a card materializes. `add_img`, `hand`, `explode`, `yank`, `hover`: the server enforces an action allowlist and the media jail, so it's safe to hand to an assistant. `bin/board-state.sh` is the reverse: it prints what's on the board, so your AI can look before it talks.
+- **The board is a stage.** `bin/board.sh '{"a":"present","title":"THE PLAN","body":"..."}'` and the thing flies center stage, enlarged and spotlit, everything else dimmed: that's the show-me verb, for when you ask your AI to put something up. `add_card`, `add_img`, `hand`, `explode`, `yank`, `hover` stage the ensemble pieces; the server enforces an action allowlist and the media jail, so it's safe to hand to an assistant. `bin/board-state.sh` is the reverse: it prints what's on the board, so your AI can look before it talks. The wizard teaches your assistant to reach for the glass whenever you ask to SEE something instead of answering in text.
 
 Anything that can write a file or curl localhost can be the brain: Claude, a local LLM, a cron job, a Stream Deck button.
 
@@ -66,6 +66,15 @@ Two pages, one scene: the tracker page owns your camera; `stage.html?role=render
 ## Credits
 
 Hand tracking by [Google MediaPipe](https://developers.google.com/mediapipe) (Apache 2.0). 3D rendering by [three.js](https://threejs.org) (MIT). Both load from public CDNs; this repo redistributes neither.
+
+## The rest of it
+
+A board is better with an agent behind it. Give it a voice and you can talk while you move things around, and a memory vault turns the notes orb into your agent's actual brain instead of a folder of files.
+
+- **The whole stack, one command.** [fullstack-agent](https://github.com/jaredrhod/fullstack-agent) installs the memory, the voice, the face, and the hands, and wires them together for you. Pick only the pieces you want: https://jaredrhod.com
+- **The videos.** Free series on all of it: https://youtube.com/@jaredrhod
+- **The Discord.** Thousands of builders, and the fastest place to get unstuck: https://discord.gg/YSdsqMv3V8
+- **Everything else,** free and open source: https://jaredrhod.com
 
 ## Support
 
