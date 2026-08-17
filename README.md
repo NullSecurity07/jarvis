@@ -20,7 +20,7 @@ python3 server.py
 
 On Windows the command is `python server.py`. Open **http://127.0.0.1:8794/stage.html** in Chrome, allow the camera, and wave. That's the whole install: the server is stdlib Python, and the page loads its hand tracking (Google MediaPipe) and 3D (three.js) from CDNs on first run.
 
-**Already inside a Claude Code session?** One sentence does it all: *"clone https://github.com/jaredrhod/barehands.git, then read barehands/barehands.md and set me up."* Your agent installs it, configures it, and wires itself in.
+**Already in a Claude Code session with your agent?** One sentence does it all: *"clone https://github.com/jaredrhod/barehands.git, then read barehands/barehands.md and set me up."* Your agent installs it, configures it, and wires itself in.
 
 Tap the ring → orbs bloom → tap an orb → your files unfold on glass. The sample notes teach the gestures from inside the board itself.
 
