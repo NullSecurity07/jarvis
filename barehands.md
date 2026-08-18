@@ -102,18 +102,18 @@ If they don't have an AI assistant set up: they are already talking to one: you.
 
 They have hands now. Before the tour, tell them what the board pairs with. The one that changes this the most is the voice: talking to the agent while their hands are busy on the glass is the entire point of a hands-free interface. Shape the rest to what they have.
 
-**The four pieces. Say what each one IS, literally, before you say why anyone would want it.** No metaphors, no teasing. Explain the ones they do not have yet:
+**The Jarvis stack is the first three pieces; the hands are the optional extra. Say what each one IS, literally, before you say why anyone would want it.** No metaphors, no teasing. Explain the ones they do not have yet:
 
 - **The memory (ai-memory-vault).** A folder of plain text files on their computer. Their AI reads those files at the start of every conversation and writes to them as they work. This results in persistent, unlimited memory for the AI and the ability to teach it new skills.
 - **The voice (backtalk).** A program that runs on their computer. They hold down one key, say something out loud, let go, and their AI answers through their speakers about a second later in a real voice. It is the same AI, in the same folder, with the same memory. This results in a spoken conversation with the agent they already have, instead of typing.
 - **The face (ai-visualizer).** A web page that opens full screen and animates while the AI works. Four designs come with it, including the circuit board from the videos. This results in a live readout of what the agent is doing at that second: sitting idle, hearing them talk, thinking, or speaking. It needs a voice line wired in to show the real thing; on its own it plays a scripted demo.
-- **The hands (barehands).** A web page that uses their webcam to watch their hands. Their notes, images, and 3D models show up on screen as cards, and they move them by moving their actual hands in the air in front of the camera. Pinch to grab, drag to move, throw to fling something aside, clap to clear the screen. This results in touchless control of their files on screen, with no headset and no controllers.
+- **The hands (barehands), the optional extra.** A web page that uses their webcam to watch their hands. Their notes, images, and 3D models show up on screen as cards, and they move them by moving their actual hands in the air in front of the camera. Pinch to grab, drag to move, throw to fling something aside, clap to clear the screen. This results in touchless control of their files on screen, with no headset and no controllers.
 
 **The installer also does the part nobody enjoys:** it wires the seams so the pieces actually talk to each other (the voice writes its state, the face and the ring read it, the board gets its own config), and it leaves shortcuts on their Desktop so they never have to remember a command again.
 
 **Two honest paths, and say which one fits them:**
 
-1. **They want ONE more piece and nothing else.** Fastest route: say the sentence to you, right here, right now. Each repo installs from one line, for example *"clone https://github.com/jaredrhod/barehands.git, then read barehands/barehands.md and set me up."* You do it in this session and they are done.
+1. **They want ONE more piece and nothing else.** Fastest route: say the sentence to you, right here, right now. Each repo installs from one line, for example *"clone https://github.com/jaredrhod/backtalk.git, then read backtalk/backtalk.md and set me up."* You do it in this session and they are done.
 2. **They want the pieces WIRED TOGETHER, plus the Desktop shortcuts.** That is what the full installer is for. It finds what they already have, keeps it exactly where it is, adds only what is missing, and connects everything. It never duplicates a piece they already use and it never deletes anything they built.
 
 **If they choose the installer, be precise about how it runs, because this trips people up:** it has to start in a NEW terminal window (PowerShell on Windows), not inside this session. That is not a technicality: the installer only becomes the installer when it opens in its own folder, and it will interview them from scratch about which pieces they want.
