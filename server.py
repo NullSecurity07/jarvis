@@ -297,6 +297,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    (HERE / "state").mkdir(exist_ok=True)   # the ring's runtime files land here
     port = int(CONFIG.get("port", 8794))
     print(f"barehands up: http://127.0.0.1:{port}/stage.html", flush=True)
     print("  tracker (camera): open that URL in Chrome", flush=True)

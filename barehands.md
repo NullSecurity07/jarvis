@@ -55,7 +55,7 @@ Edit `barehands.json` from their answers:
 }
 ```
 
-Rules: one entry per orb; `notes` orbs may point anywhere; keep exactly one `media` orb and leave its path as `media` (it is the props airlock: the only folder the board will ever stage files from. That jail is a safety feature; do not widen it). Restart the server (or have them press `R` on the page) and confirm their real notes bloom when they tap the ring, then their notes orb.
+Rules: one entry per orb; `notes` orbs may point anywhere; keep exactly one `media` orb and leave its path as `media` (it is the props airlock: the only folder the board will ever stage files from. That jail is a safety feature; do not widen it). Restart the server (a config edit only takes effect on restart; the `R` key re-reads the note folders from disk but never the config), then confirm their real notes bloom when they tap the ring, then their notes orb.
 
 ## Phase 4: Wire in the assistant
 

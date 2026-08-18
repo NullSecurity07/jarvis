@@ -274,6 +274,13 @@ if (location.protocol === "file:") {
     '</div></body>';
   throw new Error("barehands: opened over file://, server required");
 }
+// First-run watchdog: the hand tracker and the 3D library arrive from CDNs,
+// so with no internet the boot screen sits forever with no error. Say so.
+setTimeout(function () {
+  var b = document.getElementById("boot");
+  if (b && b.isConnected) b.innerHTML +=
+    '<span style="color:#7fb3ab;font-size:12px">still loading? the first run downloads the hand tracker and needs internet once. TROUBLESHOOTING.md has more.</span>';
+}, 12000);
 </script>
 <video id="cam" autoplay playsinline muted></video>
 <div id="behind"></div>
@@ -340,7 +347,7 @@ let UID = 1;
 function makeCard(def) {
   const el = document.createElement("div");
   el.className = "card";
-  el.innerHTML = `<h3>${def.title}</h3><p>${def.body || ""}</p>`;
+  el.innerHTML = `<h3>${escT(def.title)}</h3><p>${escT(def.body || "")}</p>`;
   BEHIND.appendChild(el);
   return { el, id: UID++, type: "card", def, x: 0, y: 0, scale: 1, vx: 0, vy: 0,
            grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
@@ -408,8 +415,8 @@ function makeImage(src, title) {
   const el = document.createElement("div");
   el.className = "card imgcard" + (fx || vid ? " fxcard" : "");
   el.innerHTML = vid
-    ? `<video src="${src}" autoplay loop muted playsinline></video>`
-    : `<img src="${src}" alt="">`;
+    ? `<video src="${escT(src)}" autoplay loop muted playsinline></video>`
+    : `<img src="${escT(src)}" alt="">`;
   BEHIND.appendChild(el);
   el.classList.add("mat");                     // arrives as light...
   setTimeout(() => el.classList.remove("mat"), 650);   // ...resolves true
@@ -1279,7 +1286,7 @@ function endPresent() {
 function makeOrb(def) {
   const el = document.createElement("div");
   el.className = "card orb";
-  el.innerHTML = `<h3>${def.title}</h3><p>${def.body || ""}</p>`;
+  el.innerHTML = `<h3>${escT(def.title)}</h3><p>${escT(def.body || "")}</p>`;
   BEHIND.appendChild(el);
   return { el, id: UID++, type: "orb", def, x: 0, y: 0, scale: 1,
            vx: 0, vy: 0, grabbedBy: [], ox: 0, oy: 0, flying: false,
@@ -1361,7 +1368,7 @@ function spawnStage(cx = 0.30, cy = 0.45) {
 // close. The scatter-bloom system this replaced is gone.
 function escT(t) {
   return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;")
-                  .replace(/>/g, "&gt;");
+                  .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function browserRows(b) {
@@ -1414,7 +1421,7 @@ function openBrowser(kind, ox, oy) {
       : ((CFG.orbs || [])[kind] || {}).title || "Notes").toUpperCase();
     const el = document.createElement("div");
     el.className = "panel browser";
-    el.innerHTML = `<div class="bar"><h3>${label}</h3></div>` +
+    el.innerHTML = `<div class="bar"><h3>${escT(label)}</h3></div>` +
                    `<div class="body"><div class="scroll"></div></div>`;
     BEHIND.appendChild(el);
     const b = { el, id: UID++, type: "browser", bkind: kind,
@@ -1495,7 +1502,7 @@ async function openPanel(card) {
   } catch (e) {}
   const el = document.createElement("div");
   el.className = "panel";
-  el.innerHTML = `<div class="bar"><h3>${card.def.file.split("/").pop().replace(".md","")}</h3></div>` +
+  el.innerHTML = `<div class="bar"><h3>${escT(card.def.file.split("/").pop().replace(".md",""))}</h3></div>` +
                  `<div class="body"><div class="scroll">${renderNote(text)}</div></div>`;
   BEHIND.appendChild(el);
   const p = { el, id: UID++, type: "panel", def: card.def, x: innerWidth * 0.5,
@@ -2964,29 +2971,29 @@ async function renderLoop() {
         } else if (it.type === "orb") {
           el = document.createElement("div");
           el.className = "card orb";
-          el.innerHTML = `<h3>${it.title}</h3><p>${it.body || ""}</p>`;
+          el.innerHTML = `<h3>${escT(it.title)}</h3><p>${escT(it.body || "")}</p>`;
         } else if (it.type === "browser") {
           el = document.createElement("div");
           el.className = "panel browser";
-          el.innerHTML = `<div class="bar"><h3>${it.title}</h3></div>` +
+          el.innerHTML = `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
                          `<div class="body"><div class="scroll"></div></div>`;
         } else if (it.type === "img") {
           el = document.createElement("div");
           el.className = "card imgcard" + (it.fxf ? " fxcard" : "");
           el.innerHTML = it.vd
-            ? `<video src="${it.src}" autoplay loop muted playsinline></video>`
-            : `<img src="${it.src}" alt="">`;
+            ? `<video src="${escT(it.src)}" autoplay loop muted playsinline></video>`
+            : `<img src="${escT(it.src)}" alt="">`;
           el.classList.add("mat");
           setTimeout(() => el.classList.remove("mat"), 650);
         } else if (it.type === "card") {
           el = document.createElement("div");
           el.className = "card";
-          el.innerHTML = `<h3>${it.title}</h3><p>${it.body || ""}</p>`;
+          el.innerHTML = `<h3>${escT(it.title)}</h3><p>${escT(it.body || "")}</p>`;
         } else {
           el = document.createElement("div");
           el.className = "panel";
           el.innerHTML =
-            `<div class="bar"><h3>${it.title}</h3></div>` +
+            `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
             `<div class="body"><div class="scroll">loading…</div></div>`;
           fetch("/note?f=" + encodeURIComponent(it.file))
             .then(r => r.ok ? r.text() : "(unavailable)")

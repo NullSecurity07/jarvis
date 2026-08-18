@@ -6,6 +6,7 @@ This file is written for humans AND for AI assistants. If you're an AI helping s
 
 - **Everything moves but nothing OPENS**: you opened `stage.html` by double-clicking it, so there is no server behind the page. The camera and every gesture still work (that math is all client-side), but tapping to open asks the server for the file and there is nothing to ask. Start it from the barehands folder with `python3 server.py` (Windows: `python server.py`) and open **http://127.0.0.1:8794/stage.html** in Chrome. The page now catches this and says so, but older copies will not.
 - **Server won't start / port in use**: something else holds the port. Change `"port"` in `barehands.json` (any free port works), restart, and use the new port in your URLs.
+- **Updating says local changes to `state/state` would be overwritten**: a one-time leftover from early versions that tracked the ring's live state file in git. Run `git checkout -- state/state`, then update again. Newer versions leave that file untracked, so it never comes back.
 - **Page stuck on "loading hand tracker…"**: the first run downloads the hand-tracking model and 3D library from CDNs; it needs internet once, then caches. Also: use **Chrome**; its hand tracking is the proven path.
 - **Camera won't open**: another app may own it. Press **C** to cycle cameras; the boot is resilient and will try every camera the OS offers. `?cam=<name>` in the URL pins a specific one.
 - **Hands move the wrong direction in the OBS overlay**: your OBS camera source is mirrored. Add `&mirror=1` to the render URL.
