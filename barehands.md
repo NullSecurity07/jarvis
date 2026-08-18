@@ -140,13 +140,13 @@ Offer all of this, do not push it. If they say "just this piece for now," tell t
 
 They should never have to remember a command or a URL to use this. Before the tour, put a launcher on their Desktop named after their board, and **test it by double-clicking it with them.** Never hand over an untested shortcut.
 
-The launcher does three things in order: check whether the server is already answering on their configured port, start it if it is not (**minimized, not hidden** — a hidden background launcher looks like malware to antivirus, and they should be able to see it running and close it to stop it), then open `http://127.0.0.1:<their port>/stage.html` in Chrome. Send the server's output to a log file beside the script so a failed start is still readable. (Credit where it is due: this pattern came from a community member who built it for himself on Windows and shared it.)
+The launcher does three things in order: check whether the server is already answering on their configured port, start it if it is not (**minimized, not hidden**: a hidden background launcher looks like malware to antivirus, and they should be able to see it running and close it to stop it), then open `http://127.0.0.1:<their port>/stage.html` in Chrome. Send the server's output to a log file beside the script so a failed start is still readable. (Credit where it is due: this pattern came from a community member who built it for himself on Windows and shared it.)
 
 **macOS (`.command`), and this line is MANDATORY:**
 
 ```bash
 #!/bin/bash
-export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/sbin:$PATH"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 ```
 
 A double-clicked `.command` launches with a bare system PATH where `python3` does not exist, and their shell profile never runs. Without that export the icon fails **silently**: the window flashes and closes, with no error anyone can read. Then `cd` to the barehands folder, start the server if the port is quiet, and `open` the stage URL. Make the file executable, and warn them once that the first double-click may ask permission; that is macOS being protective, click Open.
