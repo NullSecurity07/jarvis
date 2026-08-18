@@ -136,6 +136,27 @@ Tell them what to expect: a fresh Claude Code session opens with the installer a
 
 Offer all of this, do not push it. If they say "just this piece for now," tell them good choice and get out of the way.
 
+## Phase 5.75: Leave them an icon
+
+They should never have to remember a command or a URL to use this. Before the tour, put a launcher on their Desktop named after their board, and **test it by double-clicking it with them.** Never hand over an untested shortcut.
+
+The launcher does three things in order: check whether the server is already answering on their configured port, start it if it is not (**minimized, not hidden** — a hidden background launcher looks like malware to antivirus, and they should be able to see it running and close it to stop it), then open `http://127.0.0.1:<their port>/stage.html` in Chrome. Send the server's output to a log file beside the script so a failed start is still readable. (Credit where it is due: this pattern came from a community member who built it for himself on Windows and shared it.)
+
+**macOS (`.command`), and this line is MANDATORY:**
+
+```bash
+#!/bin/bash
+export PATH="/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/sbin:$PATH"
+```
+
+A double-clicked `.command` launches with a bare system PATH where `python3` does not exist, and their shell profile never runs. Without that export the icon fails **silently**: the window flashes and closes, with no error anyone can read. Then `cd` to the barehands folder, start the server if the port is quiet, and `open` the stage URL. Make the file executable, and warn them once that the first double-click may ask permission; that is macOS being protective, click Open.
+
+**Windows (`.bat`):** `cd /d` to the barehands folder, start the server minimized if the port is quiet, then `start ""` the stage URL. Windows `.bat` files inherit the user's PATH, so no export is needed there.
+
+**Do NOT set this to run at login.** Two servers starting on every boot for someone who may use the board twice a week is presumptuous, and a hidden autostart entry is exactly the shape antivirus flags. The icon is the whole feature: they click it when they want the board.
+
+One thing the icon quietly fixes: it always opens the `http://` address, so nobody using it can end up double-clicking `stage.html` and landing on the dead `file://` version where gestures work but nothing opens.
+
 ## Phase 6: The tour
 
 Walk them through the gestures (the full cheat sheet is `sample-notes/Getting Started/The Gestures.md`; stage it for them via the board: `bin/board.sh '{"a":"add_card","title":"THE GESTURES","body":"tap to open","file":"0/Getting Started/The Gestures.md","open":1}'` works when the samples are orb 0; otherwise just tell them). Minimum tour: tap the ring → orbs bloom → tap a folder orb → tap a note → it opens → pinch the title bar, drag it, tap the bar to close → two hands to stretch something huge → clap (palms flat together, fingers up) to sweep the board clean.
