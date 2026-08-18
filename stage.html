@@ -249,6 +249,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 </script>
 </head>
 <body>
+<!-- Opened by double-clicking the file instead of through the server? Everything
+     client-side still works (render, camera, gesture math), so the page LOOKS
+     alive, but every /orb /tree /note /state call dies silently: you can pinch
+     and rotate, and nothing will ever OPEN. Field-caught 2026-08-17 after a user
+     lost a day to it. Say so plainly instead of letting the next person chase
+     tap thresholds. -->
+<script>
+if (location.protocol === "file:") {
+  document.documentElement.innerHTML =
+    '<body style="margin:0;background:#04191c;color:#dff3ee;font:15px/1.65 ui-monospace,Menlo,monospace;' +
+    'display:flex;align-items:center;justify-content:center;height:100vh;padding:24px;text-align:left">' +
+    '<div style="max-width:620px">' +
+    '<div style="font-size:22px;letter-spacing:.18em;color:#6fe3c9;margin-bottom:18px">BAREHANDS NEEDS ITS SERVER</div>' +
+    '<p>You opened this file directly, so there is no server behind it. The camera and the gestures will still work, ' +
+    'but nothing will ever <b>open</b>: tapping a card asks the server for the file, and there is nothing to ask.</p>' +
+    '<p style="margin-top:16px">Start it from the barehands folder:</p>' +
+    '<pre style="background:#052227;border:1px solid #14484f;padding:12px 14px;border-radius:8px;color:#9ff0dd">' +
+    'python3 server.py      <span style="color:#6b9c96"># Windows: python server.py</span></pre>' +
+    '<p style="margin-top:14px">Then open this in Chrome:</p>' +
+    '<pre style="background:#052227;border:1px solid #14484f;padding:12px 14px;border-radius:8px;color:#9ff0dd">' +
+    'http://127.0.0.1:8794/stage.html</pre>' +
+    '<p style="margin-top:18px;color:#7fb3ab">If you changed "port" in barehands.json, use that port instead.</p>' +
+    '</div></body>';
+  throw new Error("barehands: opened over file://, server required");
+}
+</script>
 <video id="cam" autoplay playsinline muted></video>
 <div id="behind"></div>
 <div id="boot">BAREHANDS<br><span style="color:#a8d8cf;font-size:12px;letter-spacing:0.22em">by jaredrhod</span><br><span style="color:#a8d8cf;font-size:13px">loading hand tracker… allow the camera when asked</span></div>

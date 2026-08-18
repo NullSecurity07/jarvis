@@ -4,6 +4,7 @@ This file is written for humans AND for AI assistants. If you're an AI helping s
 
 ## Quick fixes first
 
+- **Everything moves but nothing OPENS**: you opened `stage.html` by double-clicking it, so there is no server behind the page. The camera and every gesture still work (that math is all client-side), but tapping to open asks the server for the file and there is nothing to ask. Start it from the barehands folder with `python3 server.py` (Windows: `python server.py`) and open **http://127.0.0.1:8794/stage.html** in Chrome. The page now catches this and says so, but older copies will not.
 - **Server won't start / port in use**: something else holds the port. Change `"port"` in `barehands.json` (any free port works), restart, and use the new port in your URLs.
 - **Page stuck on "loading hand tracker…"**: the first run downloads the hand-tracking model and 3D library from CDNs; it needs internet once, then caches. Also: use **Chrome**; its hand tracking is the proven path.
 - **Camera won't open**: another app may own it. Press **C** to cycle cameras; the boot is resilient and will try every camera the OS offers. `?cam=<name>` in the URL pins a specific one.
