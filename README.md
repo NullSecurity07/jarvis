@@ -2,7 +2,7 @@
 
 > **Never used Claude Code?** Start at [jaredrhod.com](https://jaredrhod.com): pick your situation and it routes you to the right path.
 
-**Runs on:** a webcam and Chrome; no AI needed. Any program that writes a file or curls localhost can be its brain.
+**Runs on:** a webcam and Chrome; works with any AI. Any program that writes a file or curls localhost can be its brain.
 
 Move things on your screen with your bare hands. barehands turns your webcam into a hand-tracked interface: notes, images, and 3D models float over your camera as glass cards. You pinch them, throw them, stretch them, force-pull them across the room, and blow an engine apart into its exploded view with a drag of two fingers. No headset. No controllers. No gloves. Bare hands.
 
