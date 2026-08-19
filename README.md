@@ -67,6 +67,10 @@ Two pages, one scene: the tracker page owns your camera; `stage.html?role=render
 
 Hand tracking by [Google MediaPipe](https://developers.google.com/mediapipe) (Apache 2.0). 3D rendering by [three.js](https://threejs.org) (MIT). Both load from public CDNs; this repo redistributes neither.
 
+## Updating
+
+barehands improves continuously, and gesture fixes ship often. To update, say to your agent: **"pull the latest barehands and tell me what changed."** Or run `git pull` in this folder yourself. Your config, your notes, and your media stay untouched: they live outside the tracked files. Installed through fullstack-agent? `./fullstack-agent/update.sh` updates every piece at once and prints what changed.
+
 ## The rest of it
 
 A board is better with an agent behind it. Give it a voice and you can talk while you move things around, and a memory vault turns the notes orb into your agent's actual brain instead of a folder of files.
