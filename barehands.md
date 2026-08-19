@@ -23,7 +23,7 @@ Work through the phases in order. One question at a time; wait for each answer. 
 
 ## Phase 1: Prove it runs (before any questions)
 
-1. Confirm you are running inside the repo folder (it contains `server.py`, `stage.html`, `barehands.json`). If not, ask the person to `cd` there and restart.
+1. Confirm you are running inside the repo folder (it contains `server.py`, `stage.html`, `barehands.json.example`). If not, ask the person to `cd` there and restart.
 2. Check `python3 --version` (any Python 3.9+ is fine; the server is stdlib-only, nothing to install).
 3. Start the server: `python3 server.py` (`python server.py` on Windows; run it in the background). It prints the URL.
 4. Tell them: open **http://127.0.0.1:8794/stage.html** in **Chrome** (Chrome's hand tracking is the proven path), allow the camera when asked, and wave a hand. A cursor ring should follow their fingers, and the assistant ring should be breathing on the left.
@@ -42,7 +42,7 @@ Ask, one at a time:
 
 ## Phase 3: Write the config
 
-Edit `barehands.json` from their answers:
+Create `barehands.json` if it doesn't exist yet (copy `barehands.json.example`; their copy is deliberately untracked, so updates can never touch it), then edit it from their answers:
 
 ```json
 {
@@ -157,7 +157,7 @@ A double-clicked `.command` launches with a bare system PATH where `python3` doe
 
 One thing the icon quietly fixes: it always opens the `http://` address, so nobody using it can end up double-clicking `stage.html` and landing on the dead `file://` version where gestures work but nothing opens.
 
-**A second icon beside it: `Update <name>`.** Same rules: the export line on macOS, a visible window, executable, tested by double-click. It shows what is arriving, then applies it: `cd` to the barehands folder, then `git fetch -q origin`, `git log --oneline "..@{u}"`, `git pull --ff-only`. On Windows end with `pause` so the changelog stays readable instead of the window vanishing. If the folder has no `.git` (it arrived as a zip), convert it in place first, exactly once: `git init -b main`, `git remote add origin https://github.com/jaredrhod/barehands`, `git fetch origin`, `git reset origin/main` (a plain reset, NEVER `--hard`: their edited config has to survive), `git branch --set-upstream-to=origin/main main`. And when you hand the icons over, say the update half out loud: "if you ever want the newest version, double-click `Update <name>`; it shows you what changed, and it never touches your files." If they already installed through fullstack-agent, they have an Update shortcut already; skip it rather than making a second one.
+**A second icon beside it: `Update <name>`.** Same rules: the export line on macOS, a visible window, executable, tested by double-click. macOS: after the export, `cd` to the barehands folder and run `./update.sh`. Windows: `cd /d` to the folder, `call update.bat`, then `pause` so the changelog stays readable instead of the window vanishing. The script does everything itself: shows what is arriving before applying it, wires a zip-downloaded folder to updates on its first run, and can never touch their `barehands.json`. And when you hand the icons over, say the update half out loud: "if you ever want the newest version, double-click `Update <name>`; it shows you what changed, and it never touches your files." If they already installed through fullstack-agent, they have an Update shortcut already; skip it rather than making a second one.
 
 ## Phase 6: The tour
 

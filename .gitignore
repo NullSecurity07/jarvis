@@ -5,3 +5,5 @@ __pycache__/
 state/state
 state/mood.json
 state/wave.json
+# your personal config, created at setup: never tracked, never touched by updates
+barehands.json

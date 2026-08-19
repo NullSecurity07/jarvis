@@ -64,3 +64,7 @@ When a gesture misfires or won't fire for a particular person, do NOT guess at t
 ### The philosophy
 
 Every gesture gate here answers one question: "does this SHAPE, measured against itself, match the intended pose?" Shapes transfer across people, cameras, and distances. When you tune for a new hand, you're not fixing the system; you're doing exactly what its author did: fitting the cut to the human in front of the camera.
+
+## Updating
+
+Run `./update.sh` (`update.bat` on Windows) in this folder, or double-click the `Update` icon if setup left one. It shows what changed before applying it and can never touch your `barehands.json`. If an older updater said "couldn't fast-forward" or mentioned local changes, run `./update.sh` once and it clears: it moves your config out of git's sight and everything flows after.
