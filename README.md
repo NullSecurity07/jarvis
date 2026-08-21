@@ -34,7 +34,7 @@ The "vault" on the board is just a folder of markdown, which means **an Obsidian
 {
   "name": "Assistant",
   "orbs": [
-    { "title": "Notes", "path": "~/Documents/MyVault", "kind": "notes" },
+    { "title": "Notes", "path": "~/MyVault", "kind": "notes" },
     { "title": "Props", "path": "media",               "kind": "media" }
   ]
 }
