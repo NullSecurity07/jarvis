@@ -81,3 +81,41 @@ test("worker mode: a dispatch-time throw rejects describe() and leaves _busy fal
   await assert.rejects(() => ID.describe(throwingCanvas), /boom/);
   assert.equal(ID._busy, false);
 });
+
+// --- main-thread mode: the shared-canvas race fix ---
+// A caller (faces.js) may reuse one canvas across faces, redrawing it for
+// face B before face A's describe() has finished awaiting the recognition
+// net. describeMain must copy the input onto a fresh canvas *before* that
+// await, so face A's descriptor reflects face A's pixels regardless of what
+// happens to the shared source canvas afterward. Uses a fake face-api module
+// (tools/fixtures/fake-faceapi.mjs) since real face-api/tfjs isn't available
+// in Node, and a fake `document.createElement` since there's no DOM here.
+
+class FakeCanvas {
+  constructor() { this.width = 0; this.height = 0; this.tag = null; }
+  getContext() {
+    return { drawImage: (src) => { this.tag = src.tag; this.width = src.width; this.height = src.height; } };
+  }
+}
+
+test("main-thread describe(): input chip is copied before the async net call (no shared-canvas race)", async () => {
+  globalThis.document = { createElement: () => new FakeCanvas() };
+  try {
+    const fixtureLib = new URL("./fixtures/fake-faceapi.mjs", import.meta.url).href;
+    const ID = createIdentity({ forceMain: true, lib: fixtureLib, base: "fake" });
+    const ok = await ID.ready;
+    assert.equal(ok, true);
+    assert.equal(ID.mode, "main");
+
+    const shared = new FakeCanvas();
+    shared.width = 150; shared.height = 150; shared.tag = "faceA";
+    const pending = ID.describe(shared);
+    // simulate another face's S.chip() redrawing the SAME shared canvas
+    // while faceA's descriptor call is still awaiting the (fake) net.
+    shared.tag = "faceB";
+    const vec = await pending;
+    assert.equal(vec, "faceA");   // must reflect the chip at call time, not the later redraw
+  } finally {
+    delete globalThis.document;
+  }
+});

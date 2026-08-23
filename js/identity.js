@@ -106,20 +106,20 @@ export function createIdentity({ lib = FACE_API_LIB, base = FACE_API_MODELS,
   ID.isReady = () => ID._ready;
 
   async function describeMain(canvas) {
-    // face-api's main-thread input check is `instanceof HTMLCanvasElement`;
-    // an OffscreenCanvas (e.g. handed in from a caller that also supports
-    // worker mode) fails that check. Copy onto a real <canvas> first.
-    let input = canvas;
-    if (typeof HTMLCanvasElement === "undefined" || !(canvas instanceof HTMLCanvasElement)) {
-      const c = document.createElement("canvas");
-      c.width = canvas.width; c.height = canvas.height;
-      c.getContext("2d").drawImage(canvas, 0, 0);
-      input = c;
-    }
-    // canvas is already an aligned 150x150 chip (faces.js's S.chip) — no
+    // face-api's main-thread input check is `instanceof HTMLCanvasElement`,
+    // so an OffscreenCanvas needs copying regardless. But we ALWAYS copy,
+    // even when `canvas` already is an HTMLCanvasElement: the caller supplies
+    // a face chip; we copy it so a shared/reused source canvas can't change
+    // under the await (computeFaceDescriptor yields control — a caller that
+    // reuses one canvas across faces, e.g. faces.js's S.chip fallback path,
+    // could redraw it for a different face before this read finishes).
+    const c = document.createElement("canvas");
+    c.width = canvas.width; c.height = canvas.height;
+    c.getContext("2d").drawImage(canvas, 0, 0);
+    // c is now a fresh, aligned 150x150 chip (faces.js's S.chip) — no
     // detection needed, just the recognition net's descriptor.
     const t0 = performance.now();
-    const vec = await faceapi.nets.faceRecognitionNet.computeFaceDescriptor(input);
+    const vec = await faceapi.nets.faceRecognitionNet.computeFaceDescriptor(c);
     ID.perf.ms = performance.now() - t0; ID.perf.n++;
     return vec || null;
   }
