@@ -51,6 +51,17 @@ Keys on the tracker: `D` debug overlay · `P` pose sampler · `K` camera clinic 
 - **`bin/board-state.sh`** prints what is on the board right now.
 - **`GET /state`** → `perf` (fps, inference ms, camera governor, clinic table), cursors, items, `ack`.
 
+## The owner lock (face + eyes)
+
+The board belongs to one face. On first boot, the one face alone in front of the camera for ~3 s is enrolled as the owner (`state/owner.json`, kept forever — delete it to re-learn). After that:
+
+- **You in frame, eyes live** (open, a blink or head movement in the last 8 s) → the board is yours, exactly as before.
+- **You away** → LOCKED: every gesture is ignored, the ring says LOCKED, the glass frosts so nothing can be read. Unlocks the moment you're back.
+- **Someone else** → red ring on the self-view, their hands do nothing. A face *very* close to yours (within 1.5× your face width) gets a **GUEST?** chip: tap it with your pinch or hold a thumbs-up 1 s to let them in; they stay in only while they stay that close (10 s of drifting away = revoked). Guests never unlock the board on their own.
+- Numbers: `tuning.json → owner` / `face` (`matchDist` is the identity bar; the D overlay shows every face's live score). `?lock=0` on the URL, or `bin/board.sh '{"a":"lock","on":0}'`, overrides the lock locally; `{"a":"guest","allow":1|0}` and `{"a":"enroll"}` (forget the owner) are the other commands; `bin/board-state.sh` prints the lock state and every face first.
+- Identity runs in the page (face-api.js in a Web Worker, models from jsdelivr on first run, cached after) — nothing leaves the machine. If the model can't load, an enrolled board stays LOCKED and says why.
+- Measured on this rig: identity is ~20 ms per descriptor (in the worker, off the render thread); the owner's live match score sits 0.22–0.45 against the default `matchDist` 0.5; the face tracker itself costs ~12–15 ms/frame and the stage automatically halves its rate if hands+face together exceed the frame budget. Lock engages ~1.5 s after the owner leaves frame and clears on the next 2 live frames back.
+
 ## Streaming
 
 `stage.html?role=render` is a camera-free, truly transparent mirror of the scene for an OBS browser source (`&cursors=0` hides the finger rings, `&ss=2` renders at 2×, `?portrait=1` on the tracker for 9:16). The board is also persisted (`state/board.json`) and restored after a reload — `?fresh=1` boots empty.

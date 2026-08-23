@@ -37,6 +37,12 @@ if not d:
     print("Server is up, but no tracker page has connected yet.")
     raise SystemExit
 items = d.get("items") or []
+lock = d.get("lock") or {}
+if lock.get("on") is not None:
+    print(("BOARD LOCKED — " + str(lock.get("why"))) if lock.get("on") else
+          ("board open (owner present)" if lock.get("enrolled") else "board open (no owner enrolled — lock off)"))
+    for f in d.get("faces") or []:
+        print(f"  face {f.get('id')}: {f.get('role')}  live={f.get('live')} att={f.get('att')} score={f.get('score')}")
 if not items:
     print("The board is EMPTY (as of the tracker's last heartbeat).")
     raise SystemExit

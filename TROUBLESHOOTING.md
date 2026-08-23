@@ -66,6 +66,14 @@ The camera, not the code, sets the frame rate: a webcam's auto-exposure with *dy
 
 `bin/board.sh '{"a":"dump"}'` writes the last 3 minutes of hand anatomy — with the 21 raw landmarks per hand (`tuning.json` → `tape.raw`) — to `state/tape.json`. `tools/replay.py` runs that tape back through the pinch gate's math under the tuning it was recorded with, lists every pinch (recorded vs replayed), says which lane admitted each one (2D gap or the world lane), and takes `--set key=value` what-ifs and `--expect pinches=N` assertions. It is a model of the gate (probation and the claw/clap engines are not replayed), so treat a disagreement as a lead and confirm on the glass.
 
+## The owner lock
+
+- **It never enrolled me**: enrollment needs ONE face, attentive (looking at the camera, eyes open), alone, for 3 s, with a little head movement (turn slightly left/right). Watch the toasts; `GET /owner` must return your vectors afterwards.
+- **It locks while I'm sitting here**: press `D` — your face row shows `score` (must be under `owner.matchDist`), `eye` (over `face.eyeOpenMin`), `blink` age and `att`. A score that hovers near the bar in your light → raise `matchDist` a notch (0.55) or re-enroll in the light you use (`bin/board.sh '{"a":"enroll"}'`). Glasses/hat changes shift the score a little; strong backlight shifts it a lot (the light governor helps). A beard trim or new glasses shifts the score enough to matter too — same fix: `bin/board.sh '{"a":"enroll"}'` then re-enroll in the light you actually use.
+- **"identity model not loaded"**: first run needs internet for face-api (jsdelivr); `identity-probe.html` shows the load and which mode (worker/main) works. `?lock=0` opens the board meanwhile.
+- **A guest can't get in**: their face must be within `owner.closeK` × your face width (centre to centre) — really close. The chip appears only then; thumbs-up is thumb up, four fingers folded, held `owner.thumbsUpMs`.
+- **Photo test**: a still photo of you locks after `owner.livenessMs` (no blink, no head motion).
+
 ## The hands: identity, grace, smoothing
 
 MediaPipe hands the tracker an array each frame; the tracker keeps each hand's identity across frames by wrist distance (handedness only breaks ties), never reuses an id, keeps a vanished hand as a ghost for 200 ms (its item stays parked; a hand that blinks out fires no tap and no fling), and passes every landmark through a One-Euro filter (steady at rest, sharp in motion). `?smooth=0` bypasses the filter for A/B. None of the gesture thresholds moved — they just read steadier numbers.

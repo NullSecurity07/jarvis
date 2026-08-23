@@ -185,6 +185,8 @@ def main():
     # split the tape per hand id
     per = {}
     raw_frames = 0
+    roles = {}
+    tu = 0
     for r in rows:
         for h in r.get("h") or []:
             lm = h.get("lm")
@@ -192,6 +194,8 @@ def main():
                 raw_frames += 1
             per.setdefault(h["id"], []).append(
                 (r["t"], h.get("x", 0), h.get("y", 0), lm, h.get("w"), bool(h.get("p"))))
+            roles[h.get("role", "?")] = roles.get(h.get("role", "?"), 0) + 1
+            tu += 1 if h.get("tu") else 0
     t0, t1 = rows[0]["t"], rows[-1]["t"]
     dur = (t1 - t0) / 1000
     claps = sum(1 for r in rows if r.get("clapFired"))
@@ -199,6 +203,7 @@ def main():
     print(f"TAPE {a.tape}: {len(rows)} frames, {dur:.1f}s, fps {tape.get('fps', '?')}, "
           f"{len(per)} hand id(s), raw landmarks on {raw_frames} hand-frames, "
           f"claps fired (recorded): {claps}")
+    print(f"  hand roles on the tape: {roles}; thumbs-up frames: {tu}")
     if not raw_frames:
         print("  no raw landmarks on this tape — set tuning.json tape.raw = true, "
               "reload, and dump again; only the recorded flags can be reported.")
