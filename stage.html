@@ -419,6 +419,18 @@ const TUNE = await (async () => {
   } catch (_) { return tuneMerge(TUNE_DEFAULTS, {}); }
 })();
 window.TUNE = TUNE;
+// THE DEBUG HANDLE: one place to reach the live subsystems from the
+// console (or from an automated browser check) — read-only by intent,
+// but nothing stops a console from poking it, which is the point: this
+// is how the rescue/lock/identity paths get exercised without a person
+// physically standing in front of the camera.
+window.JARVIS = {};
+// real accessors, not Object.assign (which would copy each getter's value
+// at definition time — FACES/IDENT are built later, inside boot())
+for (const [k, get] of [["TUNE", () => TUNE], ["items", () => items],
+                        ["cursors", () => cursors], ["FACES", () => FACES],
+                        ["IDENT", () => IDENT], ["LOCK", () => LOCK]])
+  Object.defineProperty(window.JARVIS, k, { get, enumerable: true });
 
 // modes: ?mode=mirror (default, self-view) | overlay (transparent — OBS
 // browser sources can't open cameras reliably on macOS, kept for browsers
