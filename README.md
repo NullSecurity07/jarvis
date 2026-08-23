@@ -29,7 +29,7 @@ Tap the ring → orbs bloom → tap an orb → your files unfold on glass.
 }
 ```
 
-- `orbs`: one line per orb. `notes` orbs point at any folder of markdown (an Obsidian vault works as-is). Keep exactly one `media` orb at `media/` — the **airlock**: the only folder the board will ever stage files from (`media/misc/` images, `media/fx/` transparent props, `media/models/` 3D, `media/holo/` hologram wireframes).
+- `orbs`: one line per orb. `notes` orbs point at any folder of markdown (an Obsidian vault works as-is). Keep exactly one `media` orb at `media/` — the **airlock**: the only folder the board will ever stage files from (`media/misc/` images, `media/fx/` transparent props, `media/models/` 3D, `media/holo/` ghost-glass holograms).
 - `res`: the tracker's capture resolution. This laptop's camera is 1280×720 max (MJPG 30 fps; the 1080p default would negotiate 10 fps YUYV).
 - `fps`: `auto` | `fast` | `light` — the light governor's default (see below).
 - The server re-reads this file whenever it changes; no restart. (`R` on the board re-reads the notes folders.)

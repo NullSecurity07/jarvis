@@ -858,7 +858,7 @@ function renderRings() {
 // dynamic import on the FIRST model staged (the import map in <head>
 // resolves the bare specifiers), so the page still boots offline and
 // the render page only pays the cost if a model actually appears.
-// Modes: "holo" (hologram-blue emissive wireframe) and
+// Modes: "holo" (teal ghost-glass, fresnel rim) and
 // "solid" (real textures); a filename like ...-solid.glb forces solid,
 // a {"mode":"solid"} param on the command overrides either way.
 const MODEL_PX = 480;
@@ -3335,6 +3335,10 @@ const FACEHUD_COLOR = { owner:"#78ffaa", guest:"#6fe3d6", candidate:"#ffdc78",
                         "guest-away":"#b9c6c4", unknown:"#b9c6c4", stranger:"#ff5a5a" };
 const FACEHUD_LABEL = { owner:"OWNER", guest:"GUEST", candidate:"GUEST?",
                         "guest-away":"GUEST · AWAY", unknown:"SCANNING", stranger:"STRANGER" };
+// Task 14 #4: the status-dot colours, derived from FACEHUD_COLOR so a
+// palette edit can't miss one — a different signal (liveness) borrowing
+// the same three hues, not the role colours themselves
+const FACEHUD_DOT = { scanning: FACEHUD_COLOR.unknown, live: FACEHUD_COLOR.owner, noBlink: FACEHUD_COLOR.candidate };
 function applyVerdict(V, now) {
   const wasLocked = LOCK.verdict ? LOCK.verdict.locked : null;
   LOCK.verdict = V; LOCK.state = V.state;
@@ -3373,13 +3377,25 @@ function applyVerdict(V, now) {
     const L = Math.min(a.x, b.x), R = Math.max(a.x, b.x);
     const boxW = R - L, boxH = b.y - a.y;
     el.style.left = L + "px"; el.style.top = a.y + "px"; el.style.width = boxW + "px"; el.style.height = boxH + "px";
-    el._b.textContent = FACEHUD_LABEL[role] || FACEHUD_LABEL.unknown;
+    // Task 14 #5: LOCK OFF (not SCANNING) when the lock isn't enabled —
+    // role stays "unknown" either way, so tell the two cases apart here.
+    const label = !V.enabled ? "LOCK OFF" : (FACEHUD_LABEL[role] || FACEHUD_LABEL.unknown);
     const scoreTxt = Number.isFinite(f.score) ? f.score.toFixed(2) : "—";
-    el._i.textContent = `id ${f.id} · ${scoreTxt}`;
-    if (!Number.isFinite(f.score)) { el._dot.style.background = "#b9c6c4"; el._status.textContent = "SCANNING…"; }
-    else if (isLive(f, TUNE, now)) { el._dot.style.background = "#78ffaa"; el._status.textContent = "LIVE"; }
-    else { el._dot.style.background = "#ffdc78"; el._status.textContent = "NO BLINK"; }
-    const tagW = el._tag.offsetWidth || 140;
+    const idTxt = `id ${f.id} · ${scoreTxt}`;
+    let dotColor, statusTxt;
+    if (!Number.isFinite(f.score)) { dotColor = FACEHUD_DOT.scanning; statusTxt = "SCANNING…"; }
+    else if (isLive(f, TUNE, now)) { dotColor = FACEHUD_DOT.live; statusTxt = "LIVE"; }
+    else { dotColor = FACEHUD_DOT.noBlink; statusTxt = "NO BLINK"; }
+    el._dot.style.background = dotColor;
+    // Task 14 #3: offsetWidth forces layout — only re-measure when the
+    // tag's own text actually changed, cache the width otherwise
+    const tagText = label + "\u0001" + idTxt + "\u0001" + statusTxt;
+    if (el._tagText !== tagText) {
+      el._tagText = tagText;
+      el._b.textContent = label; el._i.textContent = idTxt; el._status.textContent = statusTxt;
+      el._tagW = el._tag.offsetWidth || 140;
+    }
+    const tagW = el._tagW || 140;
     el._tag.className = "fh-tag " + ((L + boxW + tagW > innerWidth - 8) ? "left" : "right");
     // the guest chip: candidate = how to let them in; guest = tap to revoke
     const wantChip = role === "candidate" || role === "guest" || role === "guest-away" || role === "stranger";
@@ -3400,6 +3416,7 @@ function applyVerdict(V, now) {
   for (const id of Object.keys(LOCK.candidates)) if (!live.has(+id)) { LOCK.candidates[id].remove(); delete LOCK.candidates[id]; }
 }
 function approveGuest(faceId, how) {
+  const ch = LOCK.candidates[faceId]; if (ch) ch.dataset.hot = "0";   // Task 14 #1: no stale glow after approval
   LOCK.approvals[faceId] = { approvedT: performance.now(), how };
   toast(`guest allowed (${how}) — they must stay close to you`, 2500);
 }
@@ -3875,8 +3892,10 @@ async function boot() {
           if (tu && cur.tuT && now - cur.tuT >= TUNE.owner.thumbsUpMs && cands.length) {
             approveGuest(cands[0], "thumbs-up"); cur.tuT = 0;
           }
-          // chip tap: a quick pinch release with the cursor over a chip
-          if (wasPinched && !cur.pinched && now - (cur.pinchT || 0) < TUNE.tap.ms) {
+          // chip tap: a quick pinch release with the cursor over a chip —
+          // same tap idiom as everything else in this file: time AND travel
+          const chipTrav = Math.hypot(cur.x - (cur.tapX ?? cur.x), cur.y - (cur.tapY ?? cur.y));
+          if (wasPinched && !cur.pinched && now - (cur.pinchT || 0) < TUNE.tap.ms && chipTrav < TUNE.tap.px) {
             for (const [id, ch] of Object.entries(LOCK.candidates)) {
               const r = ch.getBoundingClientRect();
               if (cur.x > r.left - 20 && cur.x < r.right + 20 && cur.y > r.top - 20 && cur.y < r.bottom + 20) {
@@ -3899,6 +3918,7 @@ async function boot() {
 
         if (cur.pinched && !wasPinched) {
           cur.pinchT = now;
+          cur.tapX = cur.x; cur.tapY = cur.y;   // Task 14 #2: chip tap travel bound (mirrors c.tapX/tapY)
           // v19.2 (Jared's confirm): the BIRTH-SPEED gate. Wave blur
           // enters a phantom pinch and the 0.34-in/0.50-out hysteresis
           // holds it for the whole sweep — long enough to beat any
