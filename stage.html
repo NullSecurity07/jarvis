@@ -255,6 +255,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .facering.guest-away, .facering.unknown { border-color:rgba(200,200,200,0.5); border-style:dashed; box-shadow:none; }
   .facering.candidate { border-color:rgba(255,220,120,0.9); }
   .facering.stranger { border-color:rgba(255,90,90,0.9); box-shadow:0 0 14px rgba(255,90,90,0.4); }
+  .guestchip { position:absolute; transform:translate(-50%, 8px); padding:8px 12px; border-radius:12px;
+               background:rgba(8,40,44,0.72); border:1px solid rgba(255,220,120,0.7); color:#ffe9a8;
+               font:600 12px/1.35 'SF Mono', Menlo, monospace; letter-spacing:.06em; white-space:nowrap;
+               backdrop-filter:blur(8px); pointer-events:none; }
+  .guestchip.guest { border-color:rgba(120,255,170,0.8); color:#c9ffe0; }
+  .guestchip.guest-away { border-color:rgba(200,200,200,0.5); color:#d8d8d8; }
+  .guestchip.stranger { border-color:rgba(255,90,90,0.8); color:#ffc1c1; }
+  .guestchip.hot { box-shadow:0 0 18px rgba(255,220,120,0.55); }
   body.overlay #facelayer, body.keybg #facelayer { display:none; }
   /* (an earlier whole-screen voice-pulse border was removed —
      THE RING is the assistant's presence now.) */
@@ -1313,6 +1321,9 @@ function applyCmds(cmds) {
     } else if (c.a === "enroll") {          // forget the owner, re-arm the auto window
       fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) })
         .then(() => { LOCK.owner = null; LOCK.enrolled = false; LOCK.enroll = null; LOCK.state = {}; toast("owner forgotten — look at the camera alone for 3s to enroll", 4000); }).catch(() => {});
+    } else if (c.a === "guest") {           // {"allow":1} approves the current candidate(s), {"allow":0} revokes all
+      if (c.allow === 0 || c.allow === "0" || c.allow === false) { for (const id of Object.keys(LOCK.approvals)) revokeGuest(id); }
+      else if (LOCK.verdict) { for (const id of LOCK.verdict.guestCandidates) approveGuest(id, "cmd"); }
     } else if (c.a === "clear") {
       items.forEach(killItem);          // scorched earth — ring included
     } else if (c.a === "reset") {
@@ -2705,8 +2716,38 @@ function applyVerdict(V, now) {
     const a = toScreen({ x: f.box.x, y: f.box.y }), b = toScreen({ x: f.box.x + f.box.w, y: f.box.y + f.box.h });
     const L = Math.min(a.x, b.x), R = Math.max(a.x, b.x);
     el.style.left = L + "px"; el.style.top = a.y + "px"; el.style.width = (R - L) + "px"; el.style.height = (b.y - a.y) + "px";
+    // the guest chip: candidate = how to let them in; guest = tap to revoke
+    const wantChip = role === "candidate" || role === "guest" || role === "guest-away" || role === "stranger";
+    let chip = LOCK.candidates[f.id];
+    if (wantChip && !chip) { chip = document.createElement("div"); chip.className = "guestchip"; FACELAYER.appendChild(chip); LOCK.candidates[f.id] = chip; }
+    if (chip && !wantChip) { chip.remove(); delete LOCK.candidates[f.id]; chip = null; }
+    if (chip) {
+      chip.className = "guestchip " + role + (chip.dataset.hot === "1" ? " hot" : "");
+      chip.textContent = role === "candidate" ? "GUEST? — owner: tap this, or thumbs-up 1s"
+                       : role === "guest" ? "GUEST ✓ — tap to revoke"
+                       : role === "guest-away" ? "guest — come closer"
+                       : "not allowed";
+      chip.style.left = ((L + R) / 2) + "px"; chip.style.top = b.y + "px";
+      chip.dataset.face = f.id;
+    }
   }
   for (const [id, el] of FACERINGS) if (!live.has(id)) { el.remove(); FACERINGS.delete(id); }
+  for (const id of Object.keys(LOCK.candidates)) if (!live.has(+id)) { LOCK.candidates[id].remove(); delete LOCK.candidates[id]; }
+}
+function approveGuest(faceId, how) {
+  LOCK.approvals[faceId] = { approvedT: performance.now(), how };
+  toast(`guest allowed (${how}) — they must stay close to you`, 2500);
+}
+function revokeGuest(faceId) { delete LOCK.approvals[faceId]; toast("guest revoked", 1500); }
+// THUMBS-UP: thumb tip well above the wrist and above the index knuckle,
+// the four fingers folded (arch ratio < 1.15), read like every other gate
+function isThumbsUp(lms, span) {
+  if (span <= 0) return false;
+  const W0 = lms[0];
+  const fR = (t, m) => { const td = Math.hypot(lms[t].x - W0.x, lms[t].y - W0.y), md = Math.hypot(lms[m].x - W0.x, lms[m].y - W0.y); return md > 0 ? td / md : 9; };
+  const folded = [[8, 5], [12, 9], [16, 13], [20, 17]].every(([t, m]) => fR(t, m) < 1.15);
+  const thumbUp = (W0.y - lms[4].y) / span > 0.6 && lms[4].y < lms[5].y;
+  return folded && thumbUp;
 }
 // the hint bar shows the lock reason while locked, its own text otherwise
 {
@@ -3073,6 +3114,28 @@ async function boot() {
         } else cur.badRun = 0;
         if (cur.pinched) cur.lastPinchT = now;   // v3.9: clap disqualifier
         cur.el.classList.toggle("pinched", cur.pinched);
+        // ---- GUEST APPROVAL (owner's hand only): thumbs-up held, or a
+        // tap on a candidate's chip; a tap on a guest's chip revokes.
+        if (cur.role === "owner" && V.guestCandidates.length + Object.keys(LOCK.approvals).length) {
+          const tu = !cur.pinched && isThumbsUp(lms, span);
+          cur.tu = tu ? 1 : 0;
+          if (tu) { if (!cur.tuT) cur.tuT = now; }
+          else cur.tuT = 0;
+          const cands = V.guestCandidates;
+          for (const id of cands) { const ch = LOCK.candidates[id]; if (ch) ch.dataset.hot = tu ? "1" : "0"; }
+          if (tu && cur.tuT && now - cur.tuT >= TUNE.owner.thumbsUpMs && cands.length) {
+            approveGuest(cands[0], "thumbs-up"); cur.tuT = 0;
+          }
+          // chip tap: a quick pinch release with the cursor over a chip
+          if (wasPinched && !cur.pinched && now - (cur.pinchT || 0) < TUNE.tap.ms) {
+            for (const [id, ch] of Object.entries(LOCK.candidates)) {
+              const r = ch.getBoundingClientRect();
+              if (cur.x > r.left - 20 && cur.x < r.right + 20 && cur.y > r.top - 20 && cur.y < r.bottom + 20) {
+                if (LOCK.approvals[id]) revokeGuest(id); else if (cands.includes(+id)) approveGuest(+id, "tap");
+              }
+            }
+          }
+        } else cur.tu = 0;
         cur.el.style.left = cur.x + "px"; cur.el.style.top = cur.y + "px";
 
         // ---- THE PALM ENGINE — a gesture set designed for imperfect,
@@ -3659,6 +3722,8 @@ async function boot() {
                        x: +c.x.toFixed(0), y: +c.y.toFixed(0), ...(c.dbg || {}) };
           if (c.wcm === c.wcm) hr.w = +c.wcm.toFixed(1);      // world gap, cm
           if (c.touchLane) hr.tl = c.touchLane;                // which lane admitted
+          if (c.tu) hr.tu = 1;                                      // thumbs-up held this frame
+          if (c.role) hr.role = c.role;                                // owner/guest
           if (TUNE.tape.raw && c.lmRaw)                        // the 21 raw landmarks
             hr.lm = c.lmRaw.map(p => [+p.x.toFixed(4), +p.y.toFixed(4), +p.z.toFixed(4)]);
           row.h.push(hr);
