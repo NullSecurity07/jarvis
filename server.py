@@ -197,7 +197,11 @@ def owner_validate(obj):
         for v in vecs:
             if not isinstance(v, list) or len(v) != 128:
                 return None
-            row = [float(x) for x in v]
+            row = []
+            for x in v:
+                if isinstance(x, bool):
+                    return None
+                row.append(float(x))
             if any(x != x or x in (float("inf"), float("-inf")) for x in row):
                 return None
             clean.append([round(x, 6) for x in row])
@@ -378,9 +382,15 @@ class Handler(SimpleHTTPRequestHandler):
             # THE OWNER LOCK's one file: the enrolled owner's descriptors.
             # {"reset": true} deletes it (cmd enroll); otherwise validated
             # and written whole. Nothing else in the system writes here.
+            if n > 65536:
+                self._json({"err": "owner: need 1-16 vectors of 128 numbers"}, 400)
+                return
             try:
-                req = json.loads(body or b"{}")
+                req = json.loads(body)
             except Exception:
+                self._json({"err": "bad json"}, 400)
+                return
+            if not isinstance(req, dict):
                 self._json({"err": "bad json"}, 400)
                 return
             if req.get("reset"):
@@ -391,7 +401,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self._json({"ok": True, "reset": True})
                 return
             clean = owner_validate(req)
-            if clean is None or n > 65536:
+            if clean is None:
                 self._json({"err": "owner: need 1-16 vectors of 128 numbers"}, 400)
                 return
             OWNER_FILE.parent.mkdir(exist_ok=True)
