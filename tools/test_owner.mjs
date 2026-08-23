@@ -288,3 +288,7 @@ test("needsGeomBackfill: false when geomTol is 0 (the gate is off by configurati
 test("needsGeomBackfill: true — owner has no geom, face is frontal, confident, geom-valid", () => {
   assert.equal(needsGeomBackfill({ vecs: [] }, geomFace(), T), true);
 });
+
+test("needsGeomBackfill: a malformed owner.geom (wrong length) is not \"already has geometry\" — backfill still proceeds", () => {
+  assert.equal(needsGeomBackfill({ vecs: [], geom: [1, 2, 3] }, geomFace(), T), true);
+});
