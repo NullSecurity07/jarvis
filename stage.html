@@ -444,7 +444,14 @@ window.JARVIS = {};
 // at definition time — FACES/IDENT are built later, inside boot())
 for (const [k, get] of [["TUNE", () => TUNE], ["items", () => items],
                         ["cursors", () => cursors], ["FACES", () => FACES],
-                        ["IDENT", () => IDENT], ["LOCK", () => LOCK]])
+                        ["IDENT", () => IDENT], ["LOCK", () => LOCK],
+                        // THE DESKS (Task 17): DESKS is the last-loaded
+                        // /desks snapshot; deskStage/deskFocus are the
+                        // functions themselves (hoisted — defined further
+                        // down), so a browser check can exercise the
+                        // stream/switch paths with nobody at the camera.
+                        ["DESKS", () => DESKS], ["deskStage", () => stageDesk],
+                        ["deskFocus", () => deskFocus]])
   Object.defineProperty(window.JARVIS, k, { get, enumerable: true });
 
 // modes: ?mode=mirror (default, self-view) | overlay (transparent — OBS
@@ -605,7 +612,7 @@ function makeImage(src, title) {
   // as makeModel, so every existing 3D gesture (explode, force-pull,
   // rotation) just works. ?img2d=1 is the debug escape hatch back to the
   // flat glass card.
-  if (!vid && TUNE.image3d.enabled && !TUNE.image3d.flat && !Q.get("img2d")) {
+  if (!vid && TUNE.image3d.enabled && !TUNE.image3d.flat && Q.get("img2d") !== "1") {
     const el = document.createElement("div");
     el.className = "card modelcard imgcard3d";
     el.innerHTML = `<canvas></canvas>`;
@@ -1441,6 +1448,9 @@ async function buildImageScene(el, src, opts) {
         }`,
       transparent: true, depthWrite: false, side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending });
+    // rimMesh intentionally shares `geo` with `mesh` — disposeScene's
+    // scene.traverse() will call geometry.dispose() on it twice when this
+    // scene tears down; three.js treats a repeat dispose as a no-op.
     const rimMesh = new THREE.Mesh(geo, rimMat);
     rimMesh.renderOrder = 1;
 
@@ -1481,7 +1491,14 @@ async function buildImageScene(el, src, opts) {
     // and a saturation-boosting bloom on top. The rim is tighter and
     // wears the picture's own colour now; the bloom stops pushing
     // saturation and just carries the light.
-    const post = buildBloomRig(THREE, renderer, { k: bloomK, sat: 1.0, spread: 1.6 });
+    // FIX ROUND 1 (Important 3): a plain solid model only builds a bloom
+    // rig when it actually glows (holo, or a lift-detected material) —
+    // an image should pay the same ~7-pass blur/composite cost only when
+    // its rim will actually be visible, not unconditionally on every
+    // staged image (they pile up over a session).
+    const post = (bloomK > 0 && rim > 0)
+      ? buildBloomRig(THREE, renderer, { k: bloomK, sat: 1.0, spread: 1.6 })
+      : null;
 
     return { renderer, scene, camera, group, canvas, mixer: null, post, THREE,
              ghostMat: null, exParts: [], exSpread: 0, exC: 0,
@@ -1634,10 +1651,15 @@ function applyCmds(cmds) {
       loadTree().then(() => spawnStage(0.5, 0.42));
     } else if (c.a === "explode" || c.a === "assemble") {
       // THE EXPLODE verbs (2026-08-14): title-match first, else the
-      // freshest model on the board; assemble snaps the flight home
+      // freshest model on the board; assemble snaps the flight home.
+      // FIX ROUND 1 (Important 4): the FALLBACK (no title match) now
+      // requires k.exCap — the same gate the hand-scrub path already
+      // uses at :4018 — so an img3d image (exParts always [], exCap
+      // never set) can never silently absorb this and no-op; an
+      // explicit title match is untouched.
       let t = c.title ? findItem(c.title) : null;
       if (!t || t.type !== "model")
-        t = items.filter(k => k.type === "model" && k.el.isConnected).pop();
+        t = items.filter(k => k.type === "model" && k.exCap && k.el.isConnected).pop();
       if (t) { t.ex = c.a === "explode" ? 1 : 0; lastTouchedId = t.id; }
     } else if (c.a === "add_img" || c.a === "hand" || c.a === "give") {
       const it = isModelSrc(c.src) ? makeModel(c.src, c.title, c.mode, c.lift)
@@ -1769,6 +1791,12 @@ function ringToggle(ring) {
     if (o.kind === "files") {
       return { title: o.title || "Files", body: "browse", orb: "f" + o.root };
     }
+    if (o.kind === "desks") {
+      const nw = DESKS ? (DESKS.wins || []).length : 0;
+      const nd = DESKS ? (DESKS.ws || []).length : 0;
+      return { title: o.title || "Desks",
+               body: `${nd} desks · ${nw} windows`, orb: "desks" };
+    }
     const v = treeCounts(TREES[i], false);
     return { title: o.title || "Notes",
              body: `${v.dirs} folders · ${v.leaves} notes`, orb: i };
@@ -1791,7 +1819,7 @@ function ringToggle(ring) {
 }
 
 let CFG = { name: "Assistant", orbs: [] };
-let TREES = [], PROPSTREE = null;
+let TREES = [], PROPSTREE = null, DESKS = null;
 async function loadTree() {
   // jarvis.json drives everything: the ring's name and one orb per
   // configured folder (kind "notes" = a markdown tree, "media" = props)
@@ -1800,12 +1828,22 @@ async function loadTree() {
   TREES = [];
   for (let i = 0; i < (CFG.orbs || []).length; i++) {
     TREES[i] = null;
-    if (CFG.orbs[i].kind === "media" || CFG.orbs[i].kind === "files") continue;
+    if (CFG.orbs[i].kind === "media" || CFG.orbs[i].kind === "files" ||
+        CFG.orbs[i].kind === "desks") continue;
     try { const r = await fetch("/tree?orb=" + i);
           if (r.ok) TREES[i] = await r.json(); }
     catch (e) {}
   }
   try { const r = await fetch("/props"); if (r.ok) PROPSTREE = await r.json(); }
+  catch (e) {}
+  if ((CFG.orbs || []).some(o => o.kind === "desks")) await loadDesks();
+}
+
+// THE DESKS (Task 17): live i3 workspaces + windows — fetched fresh
+// whenever the pane opens/refreshes; the orb's body count uses whatever
+// was last loaded (empty until the first loadTree()/openBrowser("desks")).
+async function loadDesks() {
+  try { const r = await fetch("/desks"); if (r.ok) DESKS = await r.json(); }
   catch (e) {}
 }
 
@@ -1840,6 +1878,26 @@ function escT(t) {
 
 function browserRows(b) {
   const out = [];
+  if (b.bkind === "desks") {
+    // THE DESKS (Task 17): workspaces expand like folders; a window row
+    // carries cid/xid/ws for browserTap (not in rowTuples — those travel
+    // to the render mirror for DISPLAY only, no gesture input there).
+    if (!DESKS) return out;
+    (DESKS.ws || []).forEach(w => {
+      const key = "ws" + w.num;
+      const open = b.expanded.has(key);
+      const label = (w.name || String(w.num)) +
+        (w.focused ? " · focused" : w.visible ? " · visible" : "");
+      out.push({ d: 0, t: label, k: "ws", o: open ? 1 : 0, key });
+      if (open) {
+        (DESKS.wins || []).filter(x => x.ws === w.num).forEach(win => {
+          out.push({ d: 1, t: win.cls + (win.title ? " · " + win.title : ""),
+                     k: "win", cid: win.cid, xid: win.xid, ws: win.ws });
+        });
+      }
+    });
+    return out;
+  }
   if (b.froot != null) {
     // THE FILES BROWSER: one directory level, lazily fetched as the
     // user descends — NOT the notes/props whole-tree-upfront pattern
@@ -1874,12 +1932,17 @@ const FILE_KIND_TAG = { md: "MD", text: "TXT", code: "CODE", pdf: "PDF",
   other: "BIN" };
 function browserRowsHTML(tuples) {
   const ICO = { dir0: "▸", dir1: "▾", note: "▤", prop: "▦", widget: "▣",
-                file: "▤", up: "⬆" };
+                file: "▤", up: "⬆", ws0: "▸", ws1: "▾", win: "▤" };
   return tuples.map(([d, t, k, o, kk], i) =>
     `<div class="brow ${k}" data-i="${i}" style="padding-left:${18 + d * 26}px">` +
-    `<span class="bico">${k === "dir" ? ICO["dir" + o] : ICO[k]}</span>` +
+    `<span class="bico">${k === "dir" ? ICO["dir" + o]
+                          : k === "ws" ? ICO["ws" + o] : ICO[k]}</span>` +
     `<span class="btxt">${escT(t)}</span>` +
     (kk ? `<span class="bkind">${FILE_KIND_TAG[kk] || "?"}</span>` : "") +
+    // THE DESKS (Task 17): a fat, dedicated tap target on window rows —
+    // tapping it focuses (and switches workspace if needed) instead of
+    // staging the row as a live card
+    (k === "win" ? `<span class="bfocus">focus</span>` : "") +
     `</div>`).join("");
 }
 
@@ -1931,6 +1994,29 @@ function openBrowser(kind, ox, oy) {
     b.anim = { k: "in", t: 0 }; b.el.style.opacity = "0.05";
     items.push(b);
     loadFilesDir(b, "");
+    return;
+  }
+  if (kind === "desks") {
+    const label = String(((CFG.orbs || []).find(o => o.kind === "desks") || {})
+      .title || "Desks").toUpperCase();
+    const el = document.createElement("div");
+    el.className = "panel browser";
+    el.innerHTML = `<div class="bar"><h3>${escT(label)}</h3></div>` +
+                   `<div class="body"><div class="scroll"></div></div>`;
+    BEHIND.appendChild(el);
+    const b = { el, id: UID++, type: "browser", bkind: "desks",
+      def: { title: label, file: "" },
+      expanded: new Set(), rows: [], rowTuples: [], rowsV: 0,
+      x: ox != null ? Math.min(Math.max(ox, 300), innerWidth - 300)
+                    : innerWidth * 0.38,
+      y: oy != null ? Math.min(Math.max(oy, 380), innerHeight - 380)
+                    : innerHeight * 0.46,
+      scale: 1, vx: 0, vy: 0,
+      grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null,
+      scrollY: 0, body: el.querySelector(".scroll") };
+    b.anim = { k: "in", t: 0 }; b.el.style.opacity = "0.05";
+    items.push(b);
+    loadDesks().then(() => browserRefresh(b));
     return;
   }
   loadTree().then(() => {
@@ -1989,6 +2075,24 @@ function browserTap(b, cur) {
         }
       } else if (row.k === "up") {
         loadFilesDir(b, row.rel || "");
+      } else if (row.k === "ws") {
+        if (b.expanded.has(row.key)) b.expanded.delete(row.key);
+        else b.expanded.add(row.key);
+        browserRefresh(b);
+      } else if (row.k === "win") {
+        // the small .bfocus tap target within the row focuses (never
+        // fires from anything but this same discriminated tap-release);
+        // anywhere else on the row stages it as a live card
+        const fEl = rowEl.querySelector(".bfocus");
+        const fr = fEl && fEl.getBoundingClientRect();
+        const onFocus = fr && cur.x >= fr.left && cur.x <= fr.right &&
+                        cur.y >= fr.top && cur.y <= fr.bottom;
+        if (onFocus) {
+          deskFocus(row.xid);
+        } else {
+          stageDesk(row.xid, row.t);
+          killItem(b);   // v3.3: any selection closes the pane
+        }
       } else if (row.k === "note") {
         openPanel({ def: { file: row.f, title: row.t } });
         killItem(b);   // v3.3 (his broadened rule): selecting ANYTHING
@@ -2008,6 +2112,68 @@ function browserTap(b, cur) {
       return;
     }
   }
+}
+
+// ---- THE DESKS (Task 17): i3 workspaces/windows as live cards. A desk
+// card is its own item type — FLAT, crisp, glass-framed (reuses .panel's
+// frame/bar CSS exactly like the PDF panel does), no luminance relief,
+// no idle spin, no scan sweep: buildImageScene never runs for these, on
+// purpose — a live desktop rendered as an embossed 3D relief would be
+// unreadable. type "desk" (not "model") also keeps it out of the
+// explode/assemble fallback, which picks the freshest type:"model" item.
+// Falls into physics()'s generic move/hold-rotate/two-hand-scale bucket
+// like "img"/"media" — nothing to special-case there; only the BAR
+// (tap-close / double-tap-focus) needs its own beginGrab/endGrab branch.
+function stageDesk(xid, title) {
+  if (xid == null) return;
+  const already = items.find(i => i.type === "desk" && i.def.xid === xid &&
+                                  i.el.isConnected);
+  if (already) { already.anim = { k: "hover", t: 0 }; return already; }
+  const cap = CFG.desksMax || 3;
+  const live = items.filter(i => i.type === "desk" && i.el.isConnected);
+  if (live.length >= cap) {
+    const oldest = live.sort((a, b) => a.id - b.id)[0];
+    killItem(oldest);
+    toast(`desk cap reached (${cap}) — replaced the oldest live desktop`, 2600);
+  }
+  const el = document.createElement("div");
+  el.className = "panel desk";
+  el.innerHTML = `<div class="bar"><h3>${escT(title || "DESKTOP")}</h3></div>` +
+                 `<div class="body"><img src="/desks/stream?xid=${xid}" alt=""></div>`;
+  BEHIND.appendChild(el);
+  const it = { el, id: UID++, type: "desk",
+    def: { title: title || "", file: "", xid, src: "/desks/stream?xid=" + xid },
+    x: innerWidth * 0.5, y: innerHeight * 0.42, scale: 1, vx: 0, vy: 0,
+    grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
+  it.anim = { k: "in", t: 0 }; it.el.style.opacity = "0.05";
+  items.push(it);
+  return it;
+}
+
+// The row's small focus affordance AND a live card's double-tapped bar
+// both funnel through here: re-validate against a FRESH /desks snapshot
+// (never the possibly-stale cached DESKS var), switch workspace first if
+// the window isn't currently visible, then focus. Never called from a
+// clap or a fling — only from the discriminated quick-tap-release gates
+// in browserTap and endGrab.
+async function deskFocus(xid) {
+  if (xid == null) return;
+  let d;
+  try { const r = await fetch("/desks"); if (r.ok) d = await r.json(); }
+  catch (e) {}
+  const win = d && (d.wins || []).find(w => w.xid === xid);
+  if (!win) { toast("that window is gone", 2000); return; }
+  try {
+    if (!win.visible) {
+      await fetch("/desks/cmd", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ a: "workspace", n: win.ws }) });
+      toast("SWITCHED TO ws " + win.ws, 1800);
+    }
+    await fetch("/desks/cmd", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: "focus", cid: win.cid }) });
+  } catch (e) {}
 }
 
 // minimal safe markdown-ish render: escape all HTML, then style headers/bold
