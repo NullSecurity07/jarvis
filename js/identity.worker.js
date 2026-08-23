@@ -6,12 +6,19 @@ self.onmessage = async (e) => {
   if (m.t === "load") {
     try {
       faceapi = await import(m.lib);
-      if (faceapi.env && faceapi.env.monkeyPatch) {
-        faceapi.env.monkeyPatch({
-          Canvas: OffscreenCanvas,
-          createCanvasElement: () => new OffscreenCanvas(1, 1),
-        });
-      }
+      // face-api never auto-initializes its env inside a worker (no window,
+      // so isNodejs()/isBrowser() both fail) — env.monkeyPatch() throws
+      // "environment is not defined" there. setEnv() sets it directly instead.
+      faceapi.env.setEnv({
+        Canvas: OffscreenCanvas,
+        CanvasRenderingContext2D: OffscreenCanvasRenderingContext2D,
+        Image: ImageBitmap, ImageData, Video: OffscreenCanvas,
+        createCanvasElement: () => new OffscreenCanvas(1, 1),
+        createImageElement: () => { throw new Error("no <img> in a worker"); },
+        createVideoElement: () => { throw new Error("no <video> in a worker"); },
+        fetch: self.fetch.bind(self),
+        readFile: () => { throw new Error("no filesystem in a worker"); },
+      });
       await faceapi.tf.setBackend("webgl").catch(() => faceapi.tf.setBackend("cpu"));
       await faceapi.tf.ready();
       await Promise.all([
@@ -28,17 +35,23 @@ self.onmessage = async (e) => {
   }
   if (m.t === "desc") {
     const t0 = performance.now();
-    let vec = null;
+    let vec = null, tensor = null;
     try {
       if (!ready) throw new Error("not ready");
       const c = new OffscreenCanvas(m.bitmap.width, m.bitmap.height);
-      c.getContext("2d").drawImage(m.bitmap, 0, 0);
+      const cx = c.getContext("2d");
+      cx.drawImage(m.bitmap, 0, 0);
       m.bitmap.close();
-      const r = await faceapi.detectSingleFace(c,
+      // detectSingleFace's dimension code doesn't accept an OffscreenCanvas
+      // directly in a worker — feed it a tensor built from ImageData instead.
+      const imageData = cx.getImageData(0, 0, c.width, c.height);
+      tensor = faceapi.tf.browser.fromPixels(imageData);
+      const r = await faceapi.detectSingleFace(tensor,
         new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.3 }))
         .withFaceLandmarks(true).withFaceDescriptor();
       vec = r ? r.descriptor : null;
     } catch (err) { vec = null; }
+    finally { if (tensor) tensor.dispose(); }
     postMessage({ t: "desc", id: m.id, vec, ms: performance.now() - t0 });
   }
 };

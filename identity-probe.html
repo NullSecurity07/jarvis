@@ -18,6 +18,7 @@ log(`loading face-api (${mode === "main" ? "main thread forced" : "worker first"
 const t0 = performance.now();
 const ok = await ID.ready;
 log(`ready=${ok} mode=${ID.mode} in ${(performance.now() - t0) | 0}ms ${ID.error ? "error: " + ID.error : ""}`);
+if (ID.workerError) log(`workerError: ${ID.workerError}`);
 if (!ok) throw new Error("identity unavailable");
 v.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
 await new Promise(r => v.onloadedmetadata = r);

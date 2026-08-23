@@ -23,7 +23,7 @@ export const FACE_API_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-ap
 
 export function createIdentity({ lib = FACE_API_LIB, base = FACE_API_MODELS,
                                  workerUrl = "js/identity.worker.js", forceMain = false } = {}) {
-  const ID = { mode: "none", error: null, perf: { ms: 0, n: 0 }, _busy: false, _ready: false };
+  const ID = { mode: "none", error: null, workerError: null, perf: { ms: 0, n: 0 }, _busy: false, _ready: false };
   let worker = null, faceapi = null, pending = null, seq = 0;
 
   async function loadMain() {
@@ -59,10 +59,10 @@ export function createIdentity({ lib = FACE_API_LIB, base = FACE_API_MODELS,
   ID.ready = (async () => {
     if (!forceMain) {
       try { await loadWorker(); ID._ready = true; return true; }
-      catch (e) { ID.error = "worker: " + e.message; if (worker) { worker.terminate(); worker = null; } }
+      catch (e) { ID.workerError = e.message; if (worker) { worker.terminate(); worker = null; } }
     }
     try { await loadMain(); ID._ready = true; ID.error = null; return true; }
-    catch (e) { ID.error = (ID.error ? ID.error + "; " : "") + "main: " + e.message; ID.mode = "none"; return false; }
+    catch (e) { ID.error = "main: " + e.message; ID.mode = "none"; return false; }
   })();
   ID.isReady = () => ID._ready;
 
