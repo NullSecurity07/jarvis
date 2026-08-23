@@ -1366,19 +1366,25 @@ async function buildImageScene(el, src, opts) {
       const o = (py * cw + px) * 4;
       const r = idata[o] / 255, g = idata[o + 1] / 255,
             b = idata[o + 2] / 255, a = idata[o + 3] / 255;
-      if (a < alphaCut) holes[i] = 1;
-      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-      if (a >= 0.5 && lum > 0.22) { tr += r; tg += g; tb += b; tn++; }
-      posAttr.setZ(i, lum * depth * (h / 2));
+      if (a < alphaCut) {
+        holes[i] = 1;
+        posAttr.setZ(i, 0);      // a discarded texel never pushes geometry
+      } else {
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (a >= 0.5 && lum > 0.22) { tr += r; tg += g; tb += b; tn++; }
+        posAttr.setZ(i, lum * depth * (h / 2));
+      }
     }
     // carve the silhouette: a triangle survives only if none of its three
     // vertices is a hole — setting z alone would keep the rectangle
     const srcIdx = geo.index.array;
     const keepIdx = [];
+    const kept = new Set();          // surviving vertex indices, for the box below
     for (let i = 0; i < srcIdx.length; i += 3) {
       const a = srcIdx[i], b = srcIdx[i + 1], c = srcIdx[i + 2];
       if (holes[a] || holes[b] || holes[c]) continue;
       keepIdx.push(a, b, c);
+      kept.add(a); kept.add(b); kept.add(c);
     }
     geo.setIndex(keepIdx);
     posAttr.needsUpdate = true;
@@ -1442,8 +1448,18 @@ async function buildImageScene(el, src, opts) {
     group.add(mesh); group.add(rimMesh);
     scene.add(group);
 
-    // frame it exactly like the model path: measure, center, fit
-    const box = new THREE.Box3().setFromObject(mesh);
+    // frame it exactly like the model path: measure, center, fit — but
+    // FROM THE CARVED SILHOUETTE ONLY. Box3.setFromObject(mesh) reads the
+    // raw position attribute directly and ignores the index buffer, so it
+    // would still size the fit from the full untrimmed rectangle (a real
+    // glTF model's box only ever reflects visible geometry).
+    const box = new THREE.Box3();
+    if (kept.size) {
+      const v = new THREE.Vector3();
+      for (const i of kept) box.expandByPoint(v.fromBufferAttribute(posAttr, i));
+    } else {
+      box.setFromObject(mesh);        // fully transparent image: fall back
+    }
     const center = box.getCenter(new THREE.Vector3());
     mesh.position.sub(center); rimMesh.position.sub(center);
     const bsz = box.getSize(new THREE.Vector3());
@@ -3306,6 +3322,15 @@ async function restoreBoard() {
       if (s.type === "card" && s.title) {
         it = makeCard({ title: s.title, body: s.body || "", file: s.file || "" });
       } else if (s.type === "img" && s.src) {
+        it = makeImage(s.src, s.title);
+      } else if (s.type === "model" && s.src && !isModelSrc(s.src)) {
+        // TASK 13 FIX (Critical 1): an img3d item is type:"model" on the
+        // wire (mm:"img3d") so every 3D gesture works, but it must still
+        // come back through makeImage on restore — makeModel would run
+        // GLTFLoader on a PNG/JPG/WEBP and silently fail. Routing on
+        // "the src isn't actually a model file" (rather than trusting
+        // s.mm survived) also rescues any record whose mm field is
+        // missing or stale.
         it = makeImage(s.src, s.title);
       } else if (s.type === "model" && s.src) {
         it = makeModel(s.src, s.title, s.mm, s.lf);
