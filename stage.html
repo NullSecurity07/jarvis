@@ -763,12 +763,19 @@ function ensureRingRes(sc) {
   sc.RES = want / 440;
 }
 
+// THE MIRRORED LOCK (render role): the render page never runs
+// decide() — LOCK.verdict is always null there — so drawRing() below
+// reads this instead. renderLoop() (the render page's only caller of
+// drawRing, via renderRings()) sets it from every /state heartbeat.
+let RLOCK = false;
+
 function drawRing(sc) {
   // NO spin — the ring is still; ONE solid thick band + solid hot
   // rim; SPEAKING = the band pulses HOT WHITE on the live voice.
   // Core is CLEAR glass, wordmark + status sized to fill it.
   const d = RING.data;
-  const st = (LOCK.verdict && LOCK.verdict.locked && LOCK.enabled) ? "locked" : (d.state || "idle");
+  const locked = ROLE === "render" ? RLOCK : !!(LOCK.verdict && LOCK.verdict.locked && LOCK.enabled);
+  const st = locked ? "locked" : (d.state || "idle");
   const amp = st === "speaking" ? ringAmp() : (RING.amp *= 0.9);
   const t = Date.now() / 1000;          // wall clock: pages in sync
   const base = RING.COLS[st] || RING.COLS.idle;
@@ -5318,10 +5325,22 @@ const SHOW_CURSORS = Q.get("cursors") !== "0";
 // 2x the pixels at any stretch, the glass gradient renders finer too.
 const SS = ROLE === "render" ? (parseFloat(Q.get("ss")) || 1) : 1;
 
+// THE STALE HEARTBEAT (render role): perf.up is the TRACKER's own
+// uptime, written fresh only while its rAF loop is actually running —
+// unlike fetch success, which stays true forever (the server just
+// keeps replaying its last-known /state after the tracker page
+// closes). RHB_T is the wall-clock time we last saw it change; -Infinity
+// so a page that has never heard from the tracker starts locked, not open.
+let RHB_UP = -1, RHB_T = -Infinity;
+const RSTALE_MS = 3000;   // 3s with no fresh tracker heartbeat = fail closed
+
 const rItems = {}, rCursors = {};
 async function renderLoop() {
   try {
     const st = await (await fetch("/state", { cache: "no-store" })).json();
+    RLOCK = !!(st.lock && st.lock.on);
+    const up = st.perf && st.perf.up;
+    if (up !== RHB_UP) { RHB_UP = up; RHB_T = performance.now(); }
     const seen = new Set();
     (SHOW_CURSORS ? (st.cursors || []) : []).forEach((c, i) => {
       seen.add(i);
@@ -5526,6 +5545,11 @@ async function renderLoop() {
         rItems[k].el.remove(); delete rItems[k]; } });
     renderRings();               // the ring draws its own frames
   } catch (e) {}
+  // same visible consequence applyVerdict() gives the tracker page —
+  // #behind is the one DOM container both pages render items into, so
+  // the existing "body.locked #behind" frost rule already covers this
+  // page with no CSS change. Runs every frame, fetch-failure included.
+  document.body.classList.toggle("locked", RLOCK || (performance.now() - RHB_T > RSTALE_MS));
   requestAnimationFrame(renderLoop);
 }
 
