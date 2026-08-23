@@ -343,7 +343,7 @@ let SAMPLED = "";      // its frozen last result (D overlay)
 let landmarker = null, lastVideoTs = -1, frames = 0, fps = 0, lastFpsTs = performance.now();
 // 2026-08-23 perf probes (EMA ms): det = detectForVideo, loop = physics
 // + renders, raf = frame-to-frame gap. Streamed via /state for tuning.
-const PERF = { det: 0, loop: 0, raf: 0, lastNow: 0 };
+const PERF = { det: 0, loop: 0, raf: 0, lastNow: 0, pre: 0 };   // pre = detector-input prep
 
 let UID = 1;
 
@@ -1564,6 +1564,7 @@ async function startCam(deviceId) {
   const live = stream.getVideoTracks()[0];
   camIdx = camDevices.findIndex(d => d.label === live.label);
   toast(`camera: ${live.label || "default"}`);
+  await CAMGOV.onStream();   // (re)apply the light state: controls die with the track
 }
 
 async function pickInitialCam() {
@@ -1585,12 +1586,185 @@ async function cycleCam() {
   lastVideoTs = -1;
 }
 
+// ---- THE LIGHT GOVERNOR (2026-08-23, fitted on the J4RVIS rig).
+// The ROOM decides the frame rate. This camera's auto-exposure with
+// dynamic framerate ON buys light by stretching each frame past 1/30s
+// (measured: 17fps, bright hands); with it OFF the camera holds 31fps
+// but has NO auto-gain to fall back on — the frame arrives at half the
+// light (live spike 2026-08-23, hand-zone luma of 255: dyn ON 151 →
+// dyn OFF 71; ISP gamma 150 → 91; ROI metering: no change; manual
+// 1/30s: same as auto — i.e. exposure time is the only knob the ISP
+// has). So FAST (dyn OFF + gamma 150) is the default, and the
+// DETECTOR'S INPUT is lifted in software to the luma hands need — the
+// self-view stays raw. Only when the hand zone is too dark to amplify
+// (that is noise, not light) does the governor fall to LIGHT (dyn ON:
+// the proven 17fps config). Both states go through POST /cam (v4l2,
+// Linux); without /cam the governor is telemetry only. L cycles
+// auto→fast→light (persisted when not auto); ?fps=30|auto|light wins.
+const CAMGOV = (() => {
+  const FAST  = { auto_exposure: 3, exposure_dynamic_framerate: 0,
+                  backlight_compensation: 2, brightness: 170, gamma: 150,
+                  region_of_interest_auto_ctrls: 16 };
+  const LIGHT = { auto_exposure: 3, exposure_dynamic_framerate: 1,
+                  backlight_compensation: 2, brightness: 170, gamma: 120,
+                  region_of_interest_auto_ctrls: 16 };
+  const G = {
+    mode: "auto",          // auto | fast | light — the user's wish
+    state: "fast",         // the applied hardware state
+    have: null,            // last /cam readback, null = no bridge
+    lumaG: 0, lumaH: 0, p10: 0, p90: 0,   // raw-frame luma (0..1)
+    zone: "fixed", zoneBox: [0.2, 0.3, 0.8, 1.0],  // where hands live
+    handBox: null, lastHandT: 0,
+    gain: 1, target: 0.42, gainMax: 3.0,  // software lift for the detector
+    floor: 0.12,           // raw hand-zone luma below this = too dark to lift
+    back: 1.5,             // return to FAST when est. FAST luma > floor*back
+    darkSince: 0, brightSince: 0, flipT: 0, applying: false, why: "",
+  };
+  const mc = document.createElement("canvas"); mc.width = 64; mc.height = 36;
+  const mx = mc.getContext("2d", { willReadFrequently: true });
+  const pc = document.createElement("canvas");           // detector input
+  const px = pc.getContext("2d", { alpha: false });
+
+  async function post(set) {
+    try {
+      const r = await fetch("/cam", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ set }) });
+      const j = await r.json().catch(() => ({}));
+      if (j.cam) G.have = j.cam;
+      return r.ok;
+    } catch (e) { return false; }
+  }
+  async function readback() {
+    try {
+      const r = await fetch("/cam");
+      G.have = r.ok ? ((await r.json()).cam || null) : null;
+    } catch (e) { G.have = null; }
+    return G.have;
+  }
+  async function apply(state, why) {
+    if (G.applying) return false;
+    G.applying = true;
+    const ok = await post(state === "light" ? LIGHT : FAST);
+    if (ok) {
+      G.state = state; G.why = why; G.flipT = performance.now();
+      G.darkSince = G.brightSince = 0;
+      toast(`light: ${state.toUpperCase()} — ${why}`, 1800);
+    }
+    G.applying = false;
+    return ok;
+  }
+  const want = () => G.mode === "auto" ? G.state : G.mode;
+  async function onStream() {     // end of startCam: controls are per device-open
+    if (!(await readback())) return;
+    await apply(want(), "camera up");
+  }
+  function setMode(m, persist) {
+    G.mode = m;
+    if (persist) {
+      if (m === "auto") localStorage.removeItem("stage-light");
+      else localStorage.setItem("stage-light", m);
+    }
+    if (G.have) apply(want(), m === "auto" ? "auto" : "your call");
+    else toast(`light: ${m} (no /cam bridge — telemetry only)`, 2000);
+  }
+  function noteHand(lms, now) {   // the tracked hand's padded bbox (raw coords)
+    let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
+    for (const p of lms) {
+      if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
+      if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y;
+    }
+    const pw = (x1 - x0) * 0.25 + 0.02, ph = (y1 - y0) * 0.25 + 0.02;
+    G.handBox = [Math.max(0, x0 - pw), Math.max(0, y0 - ph),
+                 Math.min(1, x1 + pw), Math.min(1, y1 + ph)];
+    G.lastHandT = now;
+  }
+  let lastMeter = 0;
+  function meter(now, cam) {      // ~2Hz light meter + the auto policy
+    if (now - lastMeter < 500 || !cam.videoWidth) return;
+    lastMeter = now;
+    mx.drawImage(cam, 0, 0, 64, 36);
+    const d = mx.getImageData(0, 0, 64, 36).data;
+    const hb = (G.handBox && now - G.lastHandT < 2000) ? G.handBox : G.zoneBox;
+    G.zone = hb === G.zoneBox ? "fixed" : "hand";
+    const x0 = Math.floor(hb[0] * 64), y0 = Math.floor(hb[1] * 36);
+    const x1 = Math.max(x0 + 1, Math.ceil(hb[2] * 64));
+    const y1 = Math.max(y0 + 1, Math.ceil(hb[3] * 36));
+    const all = [], zone = [];
+    for (let y = 0; y < 36; y++) for (let x = 0; x < 64; x++) {
+      const i = (y * 64 + x) * 4;
+      const l = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      all.push(l);
+      if (x >= x0 && x < x1 && y >= y0 && y < y1) zone.push(l);
+    }
+    all.sort((a, b) => a - b); zone.sort((a, b) => a - b);
+    G.lumaG = all[all.length >> 1] || 0;
+    G.lumaH = zone[zone.length >> 1] || 0;
+    G.p10 = zone[zone.length / 10 | 0] || 0;
+    G.p90 = zone[Math.min(zone.length - 1, zone.length * 0.9 | 0)] || 0;
+    // software lift: bring the hand zone to target; when the zone IS a
+    // tracked hand, never clip it (p90 stays under white)
+    let gWant = G.target / Math.max(G.lumaH, 0.02);
+    if (G.zone === "hand") gWant = Math.min(gWant, 0.98 / Math.max(G.p90, 0.05));
+    gWant = Math.min(G.gainMax, Math.max(1, gWant));
+    G.gain += (gWant - G.gain) * 0.25;
+    // the auto policy
+    if (G.mode !== "auto" || !G.have || G.applying) return;
+    if (now - G.flipT < 8000) return;
+    if (Object.values(cursors).some(c => c.pinched)) {
+      G.darkSince = G.brightSince = 0; return;   // never flip mid-hold
+    }
+    if (G.state === "fast") {
+      if (G.lumaH < G.floor) {
+        if (!G.darkSince) G.darkSince = now;
+        else if (now - G.darkSince > 3000) apply("light", "too dark to lift");
+      } else G.darkSince = 0;
+    } else {
+      // LIGHT exposes ~30/fps longer: estimate what FAST would see
+      const est = G.lumaH * Math.min(1, (fps || 30) / 30);
+      if (est > G.floor * G.back) {
+        if (!G.brightSince) G.brightSince = now;
+        else if (now - G.brightSince > 5000) apply("fast", "light is back");
+      } else G.brightSince = 0;
+    }
+  }
+  function src(cam) {             // what the detector sees
+    if (G.gain < 1.03 || !cam.videoWidth) return cam;
+    if (pc.width !== cam.videoWidth || pc.height !== cam.videoHeight) {
+      pc.width = cam.videoWidth; pc.height = cam.videoHeight;
+    }
+    px.filter = `brightness(${G.gain.toFixed(2)})`;
+    px.drawImage(cam, 0, 0);
+    return pc;
+  }
+  function telemetry() {
+    const h = G.have || {};
+    return { md: G.mode, st: G.state, bridge: !!G.have,
+             dyn: h.exposure_dynamic_framerate, exp: h.exposure_time_absolute,
+             gamma: h.gamma, lg: +G.lumaG.toFixed(3), lh: +G.lumaH.toFixed(3),
+             p10: +G.p10.toFixed(3), gain: +G.gain.toFixed(2), zone: G.zone,
+             pre: +PERF.pre.toFixed(1) };
+  }
+  return { G, FAST, LIGHT, onStream, setMode, meter, noteHand, src, apply,
+           post, readback, telemetry };
+})();
+{ // ?fps= beats the persisted L choice beats auto
+  const q = (Q.get("fps") || "").toLowerCase();
+  const m = (q === "30" || q === "fast") ? "fast" : q === "light" ? "light"
+          : q === "auto" ? "auto" : (localStorage.getItem("stage-light") || "auto");
+  CAMGOV.G.mode = (m === "fast" || m === "light") ? m : "auto";
+}
+
 addEventListener("keydown", e => {
   // live respawn: re-read the notes AND props trees from disk before
   // redrawing — a freshly dropped file appears on a plain R press
   if (e.key === "r" || e.key === "R") loadTree().then(() => spawnStage());
   if (e.key === "d" || e.key === "D") dbg.style.display = dbg.style.display === "block" ? "none" : "block";
   if (e.key === "c" || e.key === "C") cycleCam();
+  if (e.key === "l" || e.key === "L") {   // the light governor: auto→fast→light
+    const nxt = { auto: "fast", fast: "light", light: "auto" }[CAMGOV.G.mode];
+    CAMGOV.setMode(nxt, true);
+  }
   if (e.key === "p" || e.key === "P") {
     SAMPLER = { until: performance.now() + 4000, r: [], h8: [], h12: [], h16: [], h20: [], s: [], a: [] };
     toast("OMNI sampler: hold the pose for 4 seconds…", 4000);
@@ -2091,14 +2265,19 @@ async function boot() {
     const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
     if (cam.currentTime !== lastVideoTs) {
       lastVideoTs = cam.currentTime;
+      const _p0 = performance.now();
+      CAMGOV.meter(now, cam);
+      const _src = CAMGOV.src(cam);          // raw video, or the gain-lifted copy
+      PERF.pre = 0.9 * PERF.pre + 0.1 * (performance.now() - _p0);
       const _t0 = performance.now();
-      const res = landmarker.detectForVideo(cam, now);
+      const res = landmarker.detectForVideo(_src, now);
       PERF.det = PERF.det ? 0.9 * PERF.det + 0.1 * (performance.now() - _t0)
                           : performance.now() - _t0;
       const seen = new Set();
       (res.landmarks || []).forEach((lms, i) => {
         seen.add(i);
         const cur = getCursor(i);
+        CAMGOV.noteHand(lms, now);           // the light meter's hand zone
         const tip = toScreen(lms[8]), thumb = toScreen(lms[4]);
         const span = Math.hypot(lms[0].x - lms[9].x, lms[0].y - lms[9].y);
         // v3.9.3: palm-axis upness (1 = fingers straight up) — the clap
@@ -2781,12 +2960,22 @@ async function boot() {
 
         }
         if (dbg.style.display === "block")
-          dbg.textContent = `mode ${MODE}\nfps ${fps}\nhands ${res.landmarks.length}` +
-            `\npinch ${ratio.toFixed(2)} ${cur.pinched ? "CLOSED" : "open"}` +
-            `\npalm ${cur.palmOpen ? "OPEN" : "-"}${cur.fpSplay ? " CLAW" : ""} pull ph${cur.fp ? cur.fp.ph : 0}` +
-            `\n${cur.fpDbg || ""}` + (SAMPLED ? `\n${SAMPLED}` : "");
+          cur.dbgLine = `hand ${i}: pinch ${ratio.toFixed(2)} ${cur.pinched ? "CLOSED" : "open"}` +
+            ` ok ${okBack ? 1 : 0} ema ${(cur.okEma || 0).toFixed(2)} t ${tRel.toFixed(2)}` +
+            ` back ${backMean.toFixed(2)} f8 ${f8v.toFixed(2)} a ${aspect.toFixed(2)} v ${hspd | 0}` +
+            `\n  palm ${cur.palmOpen ? "OPEN" : "-"}${cur.fpSplay ? " CLAW" : ""} pull ph${cur.fp ? cur.fp.ph : 0}` +
+            `  ${cur.fpDbg || ""}`;
       });
       Object.keys(cursors).map(Number).forEach(i => { if (!seen.has(i)) dropCursor(i); });
+      if (dbg.style.display === "block") {
+        const g = CAMGOV.G, h = g.have || {};
+        dbg.textContent = `mode ${MODE}  fps ${fps}  det ${PERF.det.toFixed(1)}ms pre ${PERF.pre.toFixed(1)}ms` +
+          `\nlight ${g.mode}/${g.state}${g.have ? "" : " (no /cam)"} dyn ${h.exposure_dynamic_framerate ?? "?"}` +
+          ` gamma ${h.gamma ?? "?"} luma g ${g.lumaG.toFixed(2)} h ${g.lumaH.toFixed(2)} (${g.zone}) gain ${g.gain.toFixed(2)}` +
+          `\nhands ${res.landmarks.length}` +
+          Object.keys(cursors).sort().map(k => `\n${cursors[k].dbgLine || ""}`).join("") +
+          (SAMPLED ? `\n${SAMPLED}` : "");
+      }
 
       // ---- GESTURE v3.9: THE DELIBERATE CLAP (Jared, after false
       // resets kept wiping his pinch tests: "that reset needs to be
@@ -2933,7 +3122,8 @@ function pushState(now) {
   lastPush = now;
   const st = {
     perf: { det: +PERF.det.toFixed(1), loop: +PERF.loop.toFixed(1),
-            raf: +PERF.raf.toFixed(1), fps, log: window._mpLog || undefined },
+            raf: +PERF.raf.toFixed(1), fps, log: window._mpLog || undefined,
+            cam: CAMGOV.telemetry() },
     cursors: Object.keys(cursors).sort().map(k => {
       const c = cursors[k];
       return { x: +(c.x / innerWidth).toFixed(4), y: +(c.y / innerHeight).toFixed(4),
