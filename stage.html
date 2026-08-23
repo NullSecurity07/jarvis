@@ -3024,7 +3024,8 @@ async function boot() {
             h: [h8, h12, h16].map(v => +v.toFixed(2)), claw: claw ? 1 : 0,
             inC: inClaw ? 1 : 0, pose: (cur.fp && cur.fp.pose) || 0,
             ph: cur.fp ? cur.fp.ph : 0, open: Math.round(now - (cur.lastOpenT || 0)),
-            ext: extFingers, hit: hitTest(cur) ? 1 : 0 };
+            ext: extFingers, hit: hitTest(cur) ? 1 : 0,
+            aim: cur.fp && cur.fp.ph ? cur.aim : undefined, lit: cur.fp ? cur.fp.tId : null };
           if (!cur.fpDbgT || now - cur.fpDbgT > 400) {
             cur.fpDbgT = now;                // readable refresh rate
             cur.fpDbg = `r:${ratio.toFixed(2)} ` +
@@ -3162,7 +3163,17 @@ async function boot() {
               }
               const dl = Math.hypot(dx, dy) || 1;
               dx /= dl; dy /= dl;
-              let best = null, bestScore = 1e9;
+              // 2026-08-23 THE FORGIVING AIM (his tape, 19:40: the claw
+              // ARMED and held 2s, one card on the board, and nothing
+              // ever lit — his claw faces the lens (aspect ~1.6), so the
+              // mouth's 2D normal swings with a finger twitch and the
+              // 14° cone never crossed the card). Arming is the hard
+              // part and he earned it; aiming should not be a second
+              // exam. Cone widened to ~30° (perp ≤ 0.58·proj), scored
+              // by ANGLE; and when the board holds exactly one pull-
+              // able thing, that thing is the target, whichever way
+              // the C happens to face.
+              let best = null, bestScore = 1e9, menu = [];
               items.forEach(t => {
                 if (!t.el.isConnected || t.grabbedBy.length) return;
                 // v3.9.33 (Jared: "I need to be able to claw the
@@ -3171,12 +3182,17 @@ async function boot() {
                 if (t.type === "orb" || t.type === "panel") return;
                 const vx = t.x - cur.x, vy = t.y - cur.y;
                 if (Math.hypot(vx, vy) < 160) return;   // close = pinch
+                menu.push(t);
                 const proj = vx * dx + vy * dy;
                 if (proj <= 0) return;       // behind the aim — never
                 const perp = Math.abs(vx * dy - vy * dx);
-                if (perp > proj * 0.25) return;   // the narrow cone
-                if (perp < bestScore) { bestScore = perp; best = t; }
+                if (perp > proj * 0.58) return;   // the cone (~30°)
+                const ang = Math.atan2(perp, proj);
+                if (ang < bestScore) { bestScore = ang; best = t; }
               });
+              if (!best && menu.length === 1) best = menu[0];   // the only thing to pull
+              cur.aim = { dx: +dx.toFixed(2), dy: +dy.toFixed(2), n: menu.length,
+                          tgt: best ? (best.def.title || best.type) : null };
               if (best && best.id !== fp.tId) {
                 unlight();
                 fp.tId = best.id; fp.litT = now;   // fresh strain ramp
