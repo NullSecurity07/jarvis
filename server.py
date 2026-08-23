@@ -37,6 +37,8 @@ Endpoints:
   GET  /board                  the persisted board (state/board.json): what
                                was on the glass at the last heartbeat; the
                                stage restores it after a reload
+  GET  /owner                  the enrolled owner (state/owner.json) or {}
+  POST /owner                  {vecs:[[128]..], at} enrolls; {"reset":true} forgets
   GET  /tree?orb=N             a notes orb's folder tree — read-only, JAILED
   GET  /note?f=N/<rel>         one note's text — read-only, JAILED
   GET  /props                  the media airlock as a browsable tree
@@ -77,6 +79,7 @@ HERE = Path(__file__).resolve().parent
 CONFIG_FILE = HERE / "jarvis.json"
 TUNING_FILE = HERE / "tuning.json"
 BOARD_FILE = HERE / "state" / "board.json"
+OWNER_FILE = HERE / "state" / "owner.json"
 
 
 # ---- THE CONFIG (hot): re-read whenever jarvis.json's mtime changes, so a
@@ -149,7 +152,8 @@ _ACK = 0                # highest command id the tracker reports applied
 _ACK_EV = threading.Condition(_LOCK)
 _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
             "yank", "hover", "scroll_note", "widget", "explode", "assemble",
-            "present", "clinic", "light", "reload", "dump")
+            "present", "clinic", "light", "reload", "dump",
+            "enroll", "guest", "lock")          # THE OWNER LOCK
 _MAX_QUEUE = 256        # a hidden board must not grow a silent backlog forever
 
 # ---- THE BOARD FILE: what is on the glass, persisted so a reload (or a
@@ -181,6 +185,25 @@ def _persist_board(body):
         BOARD_FILE.write_text(json.dumps({"at": time.time(), "items": keep}))
     except Exception:
         pass
+
+
+def owner_validate(obj):
+    """{vecs: 1..16 x 128 finite numbers, at} -> cleaned dict, or None."""
+    try:
+        vecs = obj.get("vecs")
+        if not isinstance(vecs, list) or not 1 <= len(vecs) <= 16:
+            return None
+        clean = []
+        for v in vecs:
+            if not isinstance(v, list) or len(v) != 128:
+                return None
+            row = [float(x) for x in v]
+            if any(x != x or x in (float("inf"), float("-inf")) for x in row):
+                return None
+            clean.append([round(x, 6) for x in row])
+        return {"vecs": clean, "at": float(obj.get("at") or time.time())}
+    except Exception:
+        return None
 
 
 # ---- THE CAMERA BRIDGE (/cam). Chrome can't reach every V4L2 control
@@ -351,6 +374,30 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:
                 self._json({"err": str(e)[:200]}, 500)
             return
+        if path == "/owner":
+            # THE OWNER LOCK's one file: the enrolled owner's descriptors.
+            # {"reset": true} deletes it (cmd enroll); otherwise validated
+            # and written whole. Nothing else in the system writes here.
+            try:
+                req = json.loads(body or b"{}")
+            except Exception:
+                self._json({"err": "bad json"}, 400)
+                return
+            if req.get("reset"):
+                try:
+                    OWNER_FILE.unlink()
+                except FileNotFoundError:
+                    pass
+                self._json({"ok": True, "reset": True})
+                return
+            clean = owner_validate(req)
+            if clean is None or n > 65536:
+                self._json({"err": "owner: need 1-16 vectors of 128 numbers"}, 400)
+                return
+            OWNER_FILE.parent.mkdir(exist_ok=True)
+            OWNER_FILE.write_text(json.dumps(clean))
+            self._json({"ok": True, "n": len(clean["vecs"])})
+            return
         if path == "/cmd":
             try:
                 cmd = json.loads(body)
@@ -435,6 +482,12 @@ class Handler(SimpleHTTPRequestHandler):
                 self._raw(BOARD_FILE.read_bytes())
             except OSError:
                 self._json({"items": []})
+            return
+        if path == "/owner":
+            try:
+                self._raw(OWNER_FILE.read_bytes())
+            except OSError:
+                self._json({})
             return
         if path == "/tree":
             # a notes orb's folder tree. Jailed to that orb's configured
