@@ -36,6 +36,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   body.ui-cyan .card h3, body.ui-cyan .panel .bar h3, body.ui-cyan .panel .close
     { color:#00e5ff; border-color:rgba(0,229,255,0.6); }
   body.ui-cyan .scroll .h { color:#00e5ff; }
+  body.clapped::after { content:""; position:fixed; inset:0; z-index:997; pointer-events:none;
+           box-shadow: inset 0 0 120px 30px rgba(140,255,230,0.55); animation: clapflash .45s ease-out; }
+  @keyframes clapflash { from { opacity:1 } to { opacity:0 } }
   #toast { position:absolute; top:14px; right:14px; z-index:998; display:none;
            background:rgba(0,0,0,0.7); color:#8ff0e4; padding:8px 14px;
            border-radius:8px; font:13px "SF Mono",Menlo,monospace;
@@ -3018,6 +3021,27 @@ async function boot() {
           const snap = ratio < 0.34 ||
                        (ratio < 0.48 && rPeak - ratio > 0.22);
           cur.fpSplay = claw;                // debug-overlay telemetry
+          // 2026-08-23 THE CLAW COACH: the gate is strict by design and
+          // used to refuse in silence (his tape: a claw read as a POINT —
+          // index straight, three folded flat — and nothing said so).
+          // Only after an OPEN flash (so only during a real attempt),
+          // when the hand is claw-ish but not a claw, name the missing
+          // piece, at most once per 1.6s. No threshold moved.
+          if (!claw && fp.ph === 0 && !cur.pinched && !inClaw &&
+              now - (cur.lastOpenT || 0) < 1500 && ratio > 0.5 &&
+              cMean < 0.7 && extFingers <= 3 &&
+              now - (cur.coachT || 0) > 1600) {
+            let why = null;
+            if (ratio <= 0.80) why = "claw: open the C wider — thumb away from index";
+            else if (aspect <= 1.05) why = "claw: don't point the fingers into the lens";
+            else if (c8 >= 0.6) why = "claw: hook the INDEX too (not a point)";
+            else if (c12 >= 0.35 || c16 >= 0.55 || cMean >= 0.30)
+              why = "claw: fold middle + ring into half-hooks";
+            else if (c20 <= 0.1) why = "claw: pinky stays OUT, straight";
+            else if (h8 >= 1.5 || h12 >= 1.5 || h16 >= 1.5) why = "claw: bend the fingertips in";
+            else if (ratio >= 1.45) why = "claw: a little less wide";
+            if (why) { cur.coachT = now; toast(why, 1400); }
+          }
           cur.dbg = {                        // the claw's anatomy, on the wire
             r: +ratio.toFixed(2), a: +aspect.toFixed(2),
             c: [c8, c12, c16, c20].map(v => +v.toFixed(2)), cm: +cMean.toFixed(2),
@@ -3327,6 +3351,8 @@ async function boot() {
           row.h.push({ id: +k, l: c.label || "", hs: c.hsc, p: c.pinched ? 1 : 0,
                        x: +c.x.toFixed(0), y: +c.y.toFixed(0), ...(c.dbg || {}) });
         }
+        if (row.h.length >= 2 && clap.tele) row.clap = clap.tele;
+        if (PERF.clapT && Date.now() - PERF.clapT < 100) row.clapFired = PERF.clapHow;
         TAPE.push(row);
         if (TAPE.length > 30 * 180) TAPE.shift();
       }
@@ -3355,10 +3381,13 @@ async function boot() {
       // hand is dead; (3) any hand that pinched in the last 800ms is
       // disqualified outright.
       const cids = Object.keys(cursors).filter(k => cursors[k].seenNow);  // no ghosts
-      const clapFire = () => {
+      const clapFire = (how) => {
         loadTree().then(() => spawnStage(0.5, 0.42));   // the ring, center
         lastResetT = now; clap.hist.length = 0;
-        toast("clap — ring center stage", 900);
+        PERF.clapT = Date.now(); PERF.clapN = (PERF.clapN || 0) + 1; PERF.clapHow = how || "contact";
+        toast(`clap (${how || "contact"}) — ring center stage`, 1200);
+        document.body.classList.add("clapped");           // a visible flash
+        setTimeout(() => document.body.classList.remove("clapped"), 450);
       };
       const clapCool = now - lastResetT > 1500 && now - lastClearT > 2500;
       if (cids.length === 2) {
@@ -3384,9 +3413,12 @@ async function boot() {
             (B.softOpen || now - (B.lastSoftT || 0) < 250);
           const bothUp = (A.handUp || 0) > 0.85 && (B.handUp || 0) > 0.85;
           clap.hist.push({ t: now, w: wristD,
-                           q: (bothOpen && bothUp) ? 1 : 0 });
+                           q: (bothOpen && bothUp) ? 1 : 0,
+                           up: Math.min(A.handUp || 0, B.handUp || 0) });
           while (clap.hist.length && now - clap.hist[0].t > 900)
             clap.hist.shift();
+          clap.tele = { w: Math.round(wristD), m: Math.round(mcpD), q: (bothOpen && bothUp) ? 1 : 0,
+                        up: [+(A.handUp || 0).toFixed(2), +(B.handUp || 0).toFixed(2)] };
           const wasApart = clap.hist.some(
             s => now - s.t <= 800 && s.w > innerWidth * 0.18);
           if (wristD < innerWidth * 0.11 && mcpD < innerWidth * 0.09 &&
@@ -3398,11 +3430,29 @@ async function boot() {
         // honored only if the pose was QUALIFIED (open + vertical) and
         // closing when tracking died
         const last = clap.hist[clap.hist.length - 1];
+        const apart = clap.hist.some(s => last.t - s.t <= 800 &&
+                                          s.w > innerWidth * 0.18);
+        // 2026-08-23 THE STRIKE READ (his tape, 19:55: two open, upright
+        // hands 670px apart started closing at ~900px/s and BOTH
+        // vanished for 1.4s — the strike happens between frames and
+        // pressed palms are no hand to the tracker; the merge read
+        // above needs wrists already within 0.16W at the last frame,
+        // which a real clap never shows). So: both hands qualified
+        // within the last 400ms, were apart, were CLOSING fast (mutual
+        // approach ≥ 500px/s over the last 150–400ms), and tracking of
+        // both died — that IS the clap.
+        let closing = 0, qualified = false;
+        for (const s of clap.hist) {
+          const age = last.t - s.t;
+          if (age >= 150 && age <= 400) closing = Math.max(closing, (s.w - last.w) / (age / 1000));
+          if (age <= 400 && s.q) qualified = true;
+        }
+        const vanished = now - last.t < 250 && cids.length === 0;
         if (now - last.t < 200 && last.q && last.w < innerWidth * 0.16 &&
-            clap.hist.some(s => last.t - s.t <= 800 &&
-                                s.w > innerWidth * 0.18) &&
-            clapCool) clapFire();
-        else clap.hist.length = 0;
+            apart && clapCool) clapFire();
+        else if (vanished && qualified && apart && closing >= 500 && clapCool)
+          clapFire("strike");
+        else if (now - last.t >= 250) clap.hist.length = 0;
       }
 
       // ---- the P CLAP recorder (v3.9.1): reports the strike anatomy
@@ -3492,6 +3542,7 @@ function pushState(now) {
     perf: { det: +PERF.det.toFixed(1), loop: +PERF.loop.toFixed(1),
             raf: +PERF.raf.toFixed(1), fps, log: window._mpLog || undefined,
             rearm: PERF.rearm || 0, rearmT: PERF.rearmT || 0, up: Math.round(performance.now() / 1000),
+            clapN: PERF.clapN || 0, clapT: PERF.clapT || 0, clapHow: PERF.clapHow,
             cam: CAMGOV.telemetry(), clinic: PERF.clinic || undefined },
     cursors: Object.keys(cursors).sort().filter(k => cursors[k].seenNow).map(k => {
       const c = cursors[k];
