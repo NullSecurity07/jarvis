@@ -21,9 +21,21 @@ export function matchScore(vec, owner) {
 export const FACE_API_LIB = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.esm.js";
 export const FACE_API_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model";
 
+// how long a single "desc" round trip is allowed to take before we give up
+// on it (resolve null) rather than let a wedged/dead worker hang describe()
+// and its caller's _busy flag forever.
+export const JOB_TIMEOUT_MS = 8000;
+
+// real Worker construction, split out so tests can inject a fake worker
+// (and a fake canvas) without touching typeof Worker/OffscreenCanvas checks.
+const defaultWorkerFactory = (url) => new Worker(url, { type: "module" });
+
 export function createIdentity({ lib = FACE_API_LIB, base = FACE_API_MODELS,
-                                 workerUrl = "js/identity.worker.js", forceMain = false } = {}) {
-  const ID = { mode: "none", error: null, workerError: null, perf: { ms: 0, n: 0 }, _busy: false, _ready: false };
+                                 workerUrl = "js/identity.worker.js", forceMain = false,
+                                 workerFactory = defaultWorkerFactory,
+                                 jobTimeoutMs = JOB_TIMEOUT_MS } = {}) {
+  const ID = { mode: "none", error: null, workerError: null, lastJobError: null,
+               perf: { ms: 0, n: 0 }, _busy: false, _ready: false };
   let worker = null, faceapi = null, pending = null, seq = 0;
 
   async function loadMain() {
@@ -38,8 +50,14 @@ export function createIdentity({ lib = FACE_API_LIB, base = FACE_API_MODELS,
   }
   function loadWorker() {
     return new Promise((resolve, reject) => {
-      if (typeof OffscreenCanvas === "undefined" || typeof Worker === "undefined") return reject(new Error("no worker canvas"));
-      worker = new Worker(workerUrl, { type: "module" });
+      // the typeof guard only applies to the real Worker/OffscreenCanvas path;
+      // a caller-supplied workerFactory (tests) bypasses it deliberately.
+      const usingDefaultFactory = workerFactory === defaultWorkerFactory;
+      if (usingDefaultFactory && (typeof OffscreenCanvas === "undefined" || typeof Worker === "undefined")) {
+        return reject(new Error("no worker canvas"));
+      }
+      try { worker = workerFactory(workerUrl); }
+      catch (e) { return reject(e); }
       const timer = setTimeout(() => reject(new Error("worker load timeout")), 45000);
       worker.onmessage = (e) => {
         const m = e.data;
@@ -47,11 +65,33 @@ export function createIdentity({ lib = FACE_API_LIB, base = FACE_API_MODELS,
         else if (m.t === "fail") { clearTimeout(timer); reject(new Error(m.err)); }
         else if (m.t === "desc" && pending && pending.id === m.id) {
           const p = pending; pending = null; ID._busy = false;
+          clearTimeout(p.timer);
           ID.perf.ms = m.ms; ID.perf.n++;
           p.resolve(m.vec ? new Float32Array(m.vec) : null);
         }
+        // any other id is a late reply for a job we already gave up on (timed
+        // out or superseded) — ignore it, pending no longer points at it.
       };
-      worker.onerror = (e) => { clearTimeout(timer); reject(new Error(e.message || "worker error")); };
+      // worker.onerror fires both for load-time script errors (loadWorker's
+      // own promise is still pending — reject it) and for a worker that dies
+      // mid-job after "ready" (fail the in-flight desc instead of leaving it
+      // to hang forever).
+      worker.onerror = (e) => {
+        const msg = (e && e.message) || "worker error";
+        if (ID.mode !== "worker") { clearTimeout(timer); reject(new Error(msg)); return; }
+        if (pending) {
+          const p = pending; pending = null; ID._busy = false; ID.lastJobError = msg;
+          clearTimeout(p.timer);
+          p.resolve(null);
+        }
+      };
+      worker.onmessageerror = () => {
+        if (pending) {
+          const p = pending; pending = null; ID._busy = false; ID.lastJobError = "message error";
+          clearTimeout(p.timer);
+          p.resolve(null);
+        }
+      };
       worker.postMessage({ t: "load", lib, base });
     });
   }
@@ -87,18 +127,42 @@ export function createIdentity({ lib = FACE_API_LIB, base = FACE_API_MODELS,
   ID.describe = async (canvas) => {
     if (!ID._ready) return null;
     if (ID._busy) throw new Error("busy");
+    if (ID.mode !== "worker") {
+      ID._busy = true;
+      try { return await describeMain(canvas); }
+      finally { ID._busy = false; }
+    }
+    // worker mode: _busy is cleared by exactly one of the paths below — the
+    // desc reply (loadWorker's onmessage), the per-job timeout, a dispatch
+    // failure right here, or a worker onerror/onmessageerror while a job is
+    // in flight. Never left for a generic finally to catch, since a hung
+    // worker must not wedge _busy true forever.
     ID._busy = true;
+    let bitmap;
     try {
-      if (ID.mode === "worker") {
-        const bitmap = canvas.transferToImageBitmap ? canvas.transferToImageBitmap()
-                                                    : await createImageBitmap(canvas);
-        return await new Promise((resolve) => {
-          pending = { id: ++seq, resolve };
-          worker.postMessage({ t: "desc", id: pending.id, bitmap }, [bitmap]);
-        });
+      bitmap = canvas.transferToImageBitmap ? canvas.transferToImageBitmap()
+                                            : await createImageBitmap(canvas);
+    } catch (e) {
+      ID._busy = false; pending = null;
+      throw e;
+    }
+    return await new Promise((resolve, reject) => {
+      const id = ++seq;
+      const timer = setTimeout(() => {
+        if (pending && pending.id === id) {
+          const p = pending; pending = null; ID._busy = false; ID.lastJobError = "timeout";
+          p.resolve(null);
+        }
+      }, jobTimeoutMs);
+      pending = { id, resolve, timer };
+      try {
+        worker.postMessage({ t: "desc", id, bitmap }, [bitmap]);
+      } catch (e) {
+        clearTimeout(timer);
+        pending = null; ID._busy = false;
+        reject(e);
       }
-      return await describeMain(canvas);
-    } finally { if (ID.mode !== "worker") ID._busy = false; }
+    });
   };
   return ID;
 }
