@@ -280,9 +280,14 @@ def board_status():
 
 class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
-        # no-store on the page itself so a plain reload always serves
-        # current code (Chrome happily caches through reloads otherwise)
-        if self.path.split("?")[0].endswith("stage.html"):
+        # no-store on the pages and the /js/ modules they import, so a
+        # plain reload always serves current code (Chrome happily caches
+        # through reloads otherwise) — a stale cached module next to a
+        # fresh page breaks the import graph at instantiation (a page can
+        # die before any code, even the black box, runs). Media/model
+        # files stay cacheable.
+        p = self.path.split("?")[0]
+        if p.endswith(".html") or p.startswith("/js/"):
             self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
