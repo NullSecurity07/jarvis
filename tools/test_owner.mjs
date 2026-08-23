@@ -1,7 +1,7 @@
 // tools/test_owner.mjs — run: node --test tools/test_owner.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decide, isLive, TUNE_OWNER_DEFAULTS, TUNE_FACE_DEFAULTS } from "../js/owner.js";
+import { decide, isLive, driftAppend, TUNE_OWNER_DEFAULTS, TUNE_FACE_DEFAULTS } from "../js/owner.js";
 
 const T = { owner: { ...TUNE_OWNER_DEFAULTS }, face: { ...TUNE_FACE_DEFAULTS } };
 const owner = (o = {}) => ({ id: 1, cx: 0.5, cy: 0.4, w: 0.2, score: 0.3, eyeOpen: 0.9, blinkT: 900, moveT: 900, ...o });
@@ -142,4 +142,122 @@ test("the best-scoring matching face is the owner when two faces match", () => {
   const v = run(now => base({ now, faces: [owner({ id: 1, score: 0.45, blinkT: now, moveT: now }),
                                            owner({ id: 2, cx: 0.8, score: 0.2, blinkT: now, moveT: now })] }), 3);
   assert.equal(v.ownerId, 2);
+});
+
+// THE GEOMETRY GATE (Task 11 Part A): a face under the descriptor bar is
+// only the owner candidate when bone-structure geometry doesn't contradict
+// it. GEOM is the enrolled owner's ratio vector; MISMATCH is far enough
+// off (>geomTol default 0.18) to trip the gate, MATCH is a close read.
+const GEOM = [0.42, 0.55, 1.1, 0.9, 0.3, 1.6];
+const MATCH = GEOM.map(x => x * 1.02);      // 2% off — well under geomTol
+const MISMATCH = GEOM.map(x => x * 1.5);    // 50% off — trips the gate
+
+test("descriptor match but geometry mismatch: NOT the owner, locked", () => {
+  const v = decide(base({ owner: { geom: GEOM },
+    faces: [owner({ geom: MISMATCH, geomOk: true })] }), T, {});
+  assert.equal(v.locked, true); assert.equal(v.why, "owner not recognized");
+  assert.equal(v.ownerId, null);
+});
+
+test("descriptor match and geometry match: IS the owner, unlocks", () => {
+  const v = run(now => base({ owner: { geom: GEOM }, now,
+    faces: [owner({ geom: MATCH, geomOk: true, blinkT: now, moveT: now })] }), 3);
+  assert.equal(v.locked, false); assert.equal(v.ownerId, 1);
+});
+
+test("f.geom null (unreadable this frame): judged on descriptor alone", () => {
+  const v = run(now => base({ owner: { geom: GEOM }, now,
+    faces: [owner({ geom: null, geomOk: true, blinkT: now, moveT: now })] }), 3);
+  assert.equal(v.locked, false); assert.equal(v.ownerId, 1);
+});
+
+test("non-frontal face (f.geomOk false): unjudgeable never blocks", () => {
+  const v = run(now => base({ owner: { geom: GEOM }, now,
+    faces: [owner({ geom: MISMATCH, geomOk: false, blinkT: now, moveT: now })] }), 3);
+  assert.equal(v.locked, false); assert.equal(v.ownerId, 1);
+});
+
+test("no enrolled geometry on file: descriptor alone decides, gate is a no-op", () => {
+  const v = run(now => base({ now,
+    faces: [owner({ geom: MISMATCH, geomOk: true, blinkT: now, moveT: now })] }), 3);
+  assert.equal(v.locked, false); assert.equal(v.ownerId, 1);
+});
+
+// POSE-LINKED HANDS (Task 11 Part C): a body's wrist claims a hand, that
+// body maps to a face by nose proximity, and that face's role decides the
+// hand's role — a skeleton fact, ahead of the face-distance fallback.
+const pose = (o = {}) => ({ id: 20, nose: { x: 0.5, y: 0.4 },
+  wristL: { x: 0.45, y: 0.7, vis: 0.9 }, wristR: { x: 0.55, y: 0.7, vis: 0.9 },
+  shoulderL: { x: 0.4, y: 0.45 }, shoulderR: { x: 0.6, y: 0.45 },
+  shoulderW: 0.2, headW: 0.12, torso: 0.3, prop: 1.6, ...o });
+
+test("pose-linked: a hand near the owner's wrist is the owner's even when a stranger's face is nearer to it", () => {
+  // the hand sits right next to the stranger (id 2, cx 0.9) — the old
+  // face-distance rule would pick the stranger (closer) and reject the
+  // hand (stranger isn't owner/guest). The pose says otherwise: its wrist
+  // is exactly at the hand, and its nose is at the OWNER's face.
+  const v = run(now => base({ now,
+    faces: [owner({ blinkT: now, moveT: now }), other()],
+    hands: [hand({ id: 10, wx: 0.85, wy: 0.65 })],
+    poses: [pose({ wristR: { x: 0.85, y: 0.65, vis: 0.9 } })] }), 3);
+  assert.equal(v.locked, false);
+  assert.equal(v.faceRole[2], "stranger");           // the face rule alone would reject this hand
+  assert.equal(v.handRole[10], "owner");              // the pose corrects it
+});
+
+test("pose-linked: a hand no pose claims falls back to today's face-distance rule", () => {
+  const v = run(now => base({ now,
+    faces: [owner({ blinkT: now, moveT: now }), other()],
+    hands: [hand({ id: 10, wx: 0.52, wy: 0.65 }), hand({ id: 11, wx: 0.9, wy: 0.7 })],
+    poses: [pose({ nose: { x: 0.5, y: 0.99 }, wristL: { x: 0.01, y: 0.01, vis: 0.9 },
+                    wristR: { x: 0.02, y: 0.02, vis: 0.9 } })] }), 3);   // this pose claims nothing
+  assert.equal(v.handRole[10], "owner"); assert.equal(v.handRole[11], "none");
+});
+
+test("pose-linked: poses: [] behaves exactly like today (no poses module / disabled)", () => {
+  const v = run(now => base({ now,
+    faces: [owner({ blinkT: now, moveT: now }), other()],
+    hands: [hand({ id: 10, wx: 0.52, wy: 0.65 }), hand({ id: 11, wx: 0.9, wy: 0.7 })],
+    poses: [] }), 3);
+  assert.equal(v.handRole[10], "owner"); assert.equal(v.handRole[11], "none");
+});
+
+test("pose-linked: prop is a tie-breaker only, when two bodies both claim a hand", () => {
+  // owner's enrolled prop is 1.6. The hand sits right next to the stranger
+  // (so the face rule, and a distance-only pose pick, would both lose it).
+  // Two bodies both have a wrist right at the hand — body A (id 21, nose at
+  // the stranger's face) has a mismatched prop, body B (id 22, nose at the
+  // owner's face) matches. B should win the hand on prop alone.
+  const v = run(now => base({ now,
+    owner: { prop: 1.6 },
+    faces: [owner({ blinkT: now, moveT: now }), other()],
+    hands: [hand({ id: 10, wx: 0.85, wy: 0.65 })],
+    poses: [
+      pose({ id: 21, nose: { x: 0.9, y: 0.4 }, prop: 2.4, wristR: { x: 0.85, y: 0.65, vis: 0.9 } }),
+      pose({ id: 22, nose: { x: 0.5, y: 0.4 }, prop: 1.62, wristR: { x: 0.85, y: 0.65, vis: 0.9 } }),
+    ] }), 3);
+  assert.equal(v.faceRole[2], "stranger");   // the face rule alone would reject this hand
+  assert.equal(v.handRole[10], "owner");
+});
+
+// TEMPLATE DRIFT (Task 11 Part B): driftAppend(vecs, seeds, vec, cap) — the
+// pure "which vector do I drop" decision. The first `seeds` vecs are the
+// enrolment window and are never dropped; over the cap, the OLDEST
+// non-seed vector goes so a bad drift can never fully replace the real you.
+test("driftAppend: under the cap, just appends", () => {
+  const vecs = ["s0", "s1", "s2", "d0"];
+  assert.deepEqual(driftAppend(vecs, 3, "d1", 6), ["s0", "s1", "s2", "d0", "d1"]);
+});
+
+test("driftAppend: at the cap, drops the OLDEST non-seed vector, keeps seeds", () => {
+  const vecs = ["s0", "s1", "s2", "d0", "d1", "d2"];   // 3 seeds + 3 drift vecs, cap 6
+  assert.deepEqual(driftAppend(vecs, 3, "d3", 6), ["s0", "s1", "s2", "d1", "d2", "d3"]);
+});
+
+test("driftAppend: seeds are never dropped even after many drifts", () => {
+  let vecs = ["s0", "s1", "s2"];
+  for (let i = 0; i < 20; i++) vecs = driftAppend(vecs, 3, "d" + i, 6);
+  assert.deepEqual(vecs.slice(0, 3), ["s0", "s1", "s2"]);
+  assert.equal(vecs.length, 6);
+  assert.deepEqual(vecs.slice(3), ["d17", "d18", "d19"]);
 });

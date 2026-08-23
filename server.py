@@ -187,25 +187,57 @@ def _persist_board(body):
         pass
 
 
+def _finite_row(v, n):
+    """A list of exactly n finite (non-bool) numbers -> rounded floats, or None."""
+    if not isinstance(v, list) or len(v) != n:
+        return None
+    row = []
+    for x in v:
+        if isinstance(x, bool):
+            return None
+        try:
+            row.append(float(x))
+        except (TypeError, ValueError):
+            return None
+    if any(x != x or x in (float("inf"), float("-inf")) for x in row):
+        return None
+    return [round(x, 6) for x in row]
+
+
 def owner_validate(obj):
-    """{vecs: 1..16 x 128 finite numbers, at} -> cleaned dict, or None."""
+    """{vecs: 1..16 x 128 finite numbers, at,
+    geom?: 6 finite numbers (Task 11: the enrolled geometry ratios),
+    prop?: 1 finite number (Task 11: the enrolled body-proportion tie-breaker),
+    seeds?: int 0..16 (Task 11: how many vecs are enrolment seeds, never
+    dropped by drift)} -> cleaned dict, or None. driftCap stays <= 16, the
+    cap this already enforced — nothing to raise."""
     try:
         vecs = obj.get("vecs")
         if not isinstance(vecs, list) or not 1 <= len(vecs) <= 16:
             return None
         clean = []
         for v in vecs:
-            if not isinstance(v, list) or len(v) != 128:
+            row = _finite_row(v, 128)
+            if row is None:
                 return None
-            row = []
-            for x in v:
-                if isinstance(x, bool):
-                    return None
-                row.append(float(x))
-            if any(x != x or x in (float("inf"), float("-inf")) for x in row):
+            clean.append(row)
+        out = {"vecs": clean, "at": float(obj.get("at") or time.time())}
+        if obj.get("geom") is not None:
+            g = _finite_row(obj["geom"], 6)
+            if g is None:
                 return None
-            clean.append([round(x, 6) for x in row])
-        return {"vecs": clean, "at": float(obj.get("at") or time.time())}
+            out["geom"] = g
+        if obj.get("prop") is not None:
+            p = _finite_row([obj["prop"]], 1)
+            if p is None:
+                return None
+            out["prop"] = p[0]
+        if obj.get("seeds") is not None:
+            s = obj["seeds"]
+            if isinstance(s, bool) or not isinstance(s, int) or not 0 <= s <= 16:
+                return None
+            out["seeds"] = s
+        return out
     except Exception:
         return None
 

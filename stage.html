@@ -358,11 +358,12 @@ addEventListener("unhandledrejection", e => { try { fetch("/dump", { method: "PO
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ err: "unhandled: " + String(e.reason && e.reason.message || e.reason),
                          stack: e.reason && e.reason.stack }) }); } catch (_) {} });
-import { HandLandmarker, FaceLandmarker, FilesetResolver } from
+import { HandLandmarker, FaceLandmarker, PoseLandmarker, FilesetResolver } from
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 import { createIdentity } from "./js/identity.js";
 import { createFaces } from "./js/faces.js";
-import { decide, isLive } from "./js/owner.js";
+import { createPose } from "./js/pose.js";
+import { decide, isLive, geomDist, driftAppend } from "./js/owner.js";
 
 // ---- THE TUNING FILE. Every hand-fitted number the gates read lives in
 // tuning.json (GET /tuning) and lands here BEFORE any module code below
@@ -388,9 +389,11 @@ const TUNE_DEFAULTS = {
   tape: { seconds: 180, raw: true },
   owner: { enabled: true, matchDist: 0.5, graceMs: 1500, livenessMs: 8000,
            closeK: 1.5, guestTimeoutMs: 10000, handReach: 3.0,
-           spanMin: 0.35, spanMax: 2.5, thumbsUpMs: 1000, enrollMs: 3000 },
+           spanMin: 0.35, spanMax: 2.5, thumbsUpMs: 1000, enrollMs: 3000,
+           geomTol: 0.18, driftMax: 0.35, driftEveryMs: 600000, driftCap: 16, propTol: 0.25 },
   face: { everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4,
           blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25 },
+  pose: { enabled: false, everyNthFrame: 2, wristTol: 0.12 },
 };
 function tuneMerge(base, over) {
   const out = Array.isArray(base) ? base.slice() : { ...base };
@@ -434,8 +437,9 @@ const LOCK = {
   verdict: null, state: {}, approvals: {}, since: 0,
   enroll: null,                          // the auto-enroll window {startT, vecs, yaws}
   candidates: {},                        // face id -> chip element (Task 7)
+  driftT: 0, driftBusy: false,           // last template-drift write / write in flight (Task 11 Part B)
 };
-let IDENT = null, FACES = null;
+let IDENT = null, FACES = null, POSE = null;
 
 // ?res=WxH — capture resolution (default 1920x1080, the tracking sweet
 // spot: MediaPipe downscales every frame to its model input anyway, so
@@ -2802,15 +2806,36 @@ function isThumbsUp(lms, span) {
 // attentive, and steady for enrollMs becomes the owner. Collects a
 // descriptor spread across the window (head angles differ), posts it
 // once, never again. A second face in frame restarts the window.
+function medianGeom(rows) {          // THE GEOMETRY GATE: component-wise median of the
+  const ok = rows.filter(r => r);    // enrolment window's frontal geoms, or null if none frontal
+  if (!ok.length) return null;
+  const n = ok[0].length, out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const col = ok.map(r => r[i]).sort((a, b) => a - b);
+    const m = col.length >> 1;
+    out[i] = col.length % 2 ? col[m] : (col[m - 1] + col[m]) / 2;
+  }
+  return out;
+}
 async function enrollTick(now) {
   if (LOCK.enrolled || !LOCK.enabled || !IDENT || !IDENT.isReady() || !FACES) return;
   const fs = FACES.list().filter(f => f.seenNow);
   if (fs.length !== 1 || !fs[0].attention) { LOCK.enroll = null; return; }
   const f = fs[0];
-  if (!LOCK.enroll || LOCK.enroll.id !== f.id) { LOCK.enroll = { id: f.id, startT: now, vecs: [], yaws: [], lastT: 0, busy: false }; toast("enrolling you as the owner — look at the camera…", 1500); }
+  if (!LOCK.enroll || LOCK.enroll.id !== f.id) { LOCK.enroll = { id: f.id, startT: now, vecs: [], yaws: [], geoms: [], props: [], lastT: 0, busy: false }; toast("enrolling you as the owner — look at the camera…", 1500); }
   const E = LOCK.enroll;
   if (E.busy || now - E.lastT < 350) return;
   E.busy = true; E.lastT = now;
+  if (f.geomOk && f.geom) E.geoms.push(f.geom);    // sampled at the same cadence as the descriptor
+  if (POSE) {                                      // POSE-LINKED HANDS: the owner's body proportion,
+    let best = null, bd = Infinity;                 // when pose tracking happens to be running already
+    for (const b of POSE.list()) {
+      if (!b.seenNow || !b.nose) continue;
+      const d = Math.hypot(b.nose.x - f.cx, b.nose.y - f.cy);
+      if (d < 1.2 * Math.max(f.w, 1e-3) && d < bd) { bd = d; best = b; }
+    }
+    if (best && Number.isFinite(best.prop)) E.props.push(best.prop);
+  }
   try {
     // THE HANDS convention (Task 4 ruling): identity's pipeline is
     // aligned-chip → faceRecognitionNet only; FACES.chip is the one
@@ -2823,7 +2848,16 @@ async function enrollTick(now) {
   E.busy = false;
   const spread = E.yaws.length ? Math.max(...E.yaws) - Math.min(...E.yaws) : 0;
   if (now - E.startT >= TUNE.owner.enrollMs && E.vecs.length >= 6 && spread > 8) {
-    const payload = { vecs: E.vecs.slice(-12), at: Date.now() };
+    const vecs = E.vecs.slice(-12);
+    // Task 11 Part B: the owner file gains geom (median of this window's
+    // frontal frames) and seeds (how many of vecs are enrolment vecs —
+    // drift can append past them but never drop them). Task 11 Part C:
+    // prop (body proportion) rides along IF pose tracking happened to be
+    // running during enrolment — most owners enrol before the controller
+    // ever turns pose on, so this is commonly absent, which is fine: the
+    // pose tie-break is additive and a no-op without it.
+    const propMedian = E.props.length ? medianGeom(E.props.map(x => [x]))[0] : undefined;
+    const payload = { vecs, geom: medianGeom(E.geoms) || undefined, prop: propMedian, seeds: vecs.length, at: Date.now() };
     try {
       const r = await fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (r.ok) { LOCK.owner = payload; LOCK.enrolled = true; LOCK.enroll = null; toast("enrolled you as the owner — the board is yours", 4000); }
@@ -2831,6 +2865,30 @@ async function enrollTick(now) {
   } else if (now - E.startT >= TUNE.owner.enrollMs * 3 && spread <= 8) {
     toast("turn your head a little left and right to finish enrolling", 1500); E.startT = now - TUNE.owner.enrollMs + 1500;
   }
+}
+// TEMPLATE DRIFT (Task 11 Part B): beard trims, new glasses, hair — the
+// owner's descriptor set follows the wearer over time. Every condition
+// below must hold before a write; driftEveryMs: 0 disables it outright.
+// geom is carried forward unchanged (bone structure doesn't drift; only
+// the descriptor set does) — seeds falls back to the whole current vecs
+// set for an owner file enrolled before Task 11 (no seeds field on disk),
+// so an old real enrolment is never treated as droppable drift.
+async function driftTick(V, now) {
+  if (!LOCK.enrolled || !LOCK.owner || V.locked || !V.ownerId || !FACES || LOCK.driftBusy) return;
+  const T = TUNE.owner;
+  if (!T.driftEveryMs || now - (LOCK.driftT || 0) < T.driftEveryMs) return;
+  const f = FACES.list().find(x => x.id === V.ownerId);
+  if (!f || !f.seenNow || !f.geomOk || !f.attention) return;
+  if (!Number.isFinite(f.score) || f.score >= T.driftMax || !f.lastVec) return;
+  LOCK.driftBusy = true;
+  try {
+    const seeds = Number.isInteger(LOCK.owner.seeds) ? LOCK.owner.seeds : LOCK.owner.vecs.length;
+    const vecs = driftAppend(LOCK.owner.vecs, seeds, Array.from(f.lastVec), T.driftCap);
+    const payload = { vecs, geom: LOCK.owner.geom, prop: LOCK.owner.prop, seeds, at: Date.now() };
+    const r = await fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (r.ok) { LOCK.owner = payload; LOCK.driftT = now; toast("owner template updated (beard/lighting drift)", 2500); }
+  } catch (_) {}
+  LOCK.driftBusy = false;
 }
 
 async function boot() {
@@ -2863,6 +2921,12 @@ async function boot() {
     if (!LOCK.enrolled && LOCK.enabled) toast("no owner enrolled yet — look at the camera, alone, for 3s", 5000);
   });
   FACES.ready.then(ok => { if (!ok) toast("face tracker failed: " + FACES.error, 6000); });
+  // POSE-LINKED HANDS (Task 11 Part C): ships enabled:false — the
+  // PoseLandmarker is only ever constructed (model download, GPU slot)
+  // when the tuning key says so; the controller flips it on after
+  // measuring the frame budget live.
+  POSE = TUNE.pose.enabled ? createPose({ PoseLandmarker, vision: _vision, tune: TUNE }) : null;
+  if (POSE) POSE.ready.then(ok => { if (!ok) toast("pose tracker failed: " + POSE.error, 6000); });
   // 2026-08-23 — THE DELEGATE WATCHDOG (this machine: GPU inference
   // benches 8–11ms in a bare page, but the stage's boot lands on a
   // silent CPU fallback at ~51ms → 10–17fps and every speed-based
@@ -2900,6 +2964,7 @@ async function boot() {
   if (Q.get("fresh") !== "1") await restoreBoard();
   toast("jarvis v2.0", 2000);  // build fingerprint
   let lastT = performance.now();
+  let poseSlow = 0, poseFast = 0;   // THE POSE's own budget hysteresis (Task 11 Part C)
 
   function frame(now) {
     const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
@@ -2925,6 +2990,13 @@ async function boot() {
         else if (tot < 16 && FACES.perf.every > 1) { FACES._fast++; if (FACES._fast > 150) { FACES.setEvery(1); FACES._fast = 0; } }
         else { FACES._slow = 0; FACES._fast = 0; }
       }
+      if (POSE) {
+        POSE.tick(_src, now);              // THE POSE, same frame — half the face rate by default
+        const totP = PERF.det + (FACES ? FACES.perf.face : 0) + POSE.perf.pose;
+        if (totP > 24 && POSE.perf.every === 2) { poseSlow++; if (poseSlow > 90) { POSE.setEvery(3); poseSlow = 0; } }
+        else if (totP < 16 && POSE.perf.every > 2) { poseFast++; if (poseFast > 150) { POSE.setEvery(2); poseFast = 0; } }
+        else { poseSlow = 0; poseFast = 0; }
+      }
       CLINIC.tick(now, res);               // the camera clinic's recorder
       const seen = new Set();
       const ids = HANDS.assign(res, now);    // stable ids (THE HANDS)
@@ -2933,11 +3005,14 @@ async function boot() {
       const handsIn = (res.landmarks || []).map((lms, mi) => ({
         id: ids[mi], wx: lms[0].x, wy: lms[0].y,
         span: Math.hypot(lms[0].x - lms[9].x, lms[0].y - lms[9].y) }));
+      const posesIn = POSE ? POSE.list() : [];
       const V = decide({ now, enabled: LOCK.enabled, enrolled: LOCK.enrolled,
                          identityReady: !!(IDENT && IDENT.isReady()), lockOverride: LOCK.override,
-                         faces: FACES ? FACES.list() : [], hands: handsIn, approvals: LOCK.approvals },
+                         faces: FACES ? FACES.list() : [], hands: handsIn, approvals: LOCK.approvals,
+                         owner: LOCK.owner, poses: posesIn },
                        TUNE, LOCK.state);
       applyVerdict(V, now);
+      driftTick(V, now);                    // THE TEMPLATE DRIFT (Task 11 Part B), fire-and-forget
       (res.landmarks || []).forEach((lmsRaw, mi) => {
         const i = ids[mi];
         { // THE OWNER LOCK: a hand that is not the owner's or a guest's never
@@ -3789,9 +3864,11 @@ async function boot() {
           `\nhands ${res.landmarks.length}` +
           `\nlock ${LOCK.verdict ? (LOCK.verdict.locked ? "LOCKED" : "open") + " · " + LOCK.verdict.why : "booting"}` +
           ` ident ${IDENT ? IDENT.mode : "-"} face ${FACES ? FACES.perf.face.toFixed(1) : "-"}ms/${FACES ? FACES.perf.every : "-"} id ${FACES ? FACES.perf.id.toFixed(0) : "-"}ms` +
+          ` pose ${POSE ? POSE.perf.pose.toFixed(1) : "-"}ms/${POSE ? POSE.perf.every : "-"} bodies ${POSE ? POSE.list().filter(b => b.seenNow).length : "-"}` +
           (FACES ? FACES.list().filter(f => f.seenNow).map(f =>
             `\n  face ${f.id} ${(LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "?"} score ${Number.isFinite(f.score) ? f.score.toFixed(3) : "-"}` +
-            ` eye ${f.eyeOpen.toFixed(2)} blink ${((performance.now() - f.blinkT) / 1000).toFixed(1)}s yaw ${f.yaw.toFixed(0)} pitch ${f.pitch.toFixed(0)} att ${f.attention ? 1 : 0} w ${f.w.toFixed(2)}`).join("") : "") +
+            ` eye ${f.eyeOpen.toFixed(2)} blink ${((performance.now() - f.blinkT) / 1000).toFixed(1)}s yaw ${f.yaw.toFixed(0)} pitch ${f.pitch.toFixed(0)} att ${f.attention ? 1 : 0} w ${f.w.toFixed(2)}` +
+            ` geom ${f.geomOk ? "frontal" : "-"} gdist ${(f.geom && LOCK.owner && LOCK.owner.geom) ? geomDist(f.geom, LOCK.owner.geom).toFixed(3) : "-"}`).join("") : "") +
           Object.keys(cursors).sort().map(k => `\n${cursors[k].dbgLine || ""}`).join("") +
           (SAMPLED ? `\n${SAMPLED}` : "");
       }
@@ -3972,11 +4049,14 @@ function pushState(now) {
       x: +f.cx.toFixed(3), y: +f.cy.toFixed(3), w: +f.w.toFixed(3), h: +f.h.toFixed(3),
       live: isLive(f, TUNE, performance.now()) ? 1 : 0,
       att: f.attention ? 1 : 0, eye: +f.eyeOpen.toFixed(2),
-      score: Number.isFinite(f.score) ? +f.score.toFixed(3) : null })) : [],
+      score: Number.isFinite(f.score) ? +f.score.toFixed(3) : null,
+      geomOk: f.geomOk ? 1 : 0 })) : [],
     perf: { det: +PERF.det.toFixed(1), face: FACES ? +FACES.perf.face.toFixed(1) : 0, faceEvery: FACES ? FACES.perf.every : 0, id: FACES ? +FACES.perf.id.toFixed(0) : 0, loop: +PERF.loop.toFixed(1),
             raf: +PERF.raf.toFixed(1), fps, log: window._mpLog || undefined,
             rearm: PERF.rearm || 0, rearmT: PERF.rearmT || 0, up: Math.round(performance.now() / 1000),
             clapN: PERF.clapN || 0, clapT: PERF.clapT || 0, clapHow: PERF.clapHow,
+            pose: POSE ? +POSE.perf.pose.toFixed(1) : 0, poseEvery: POSE ? POSE.perf.every : 0,
+            poseN: POSE ? POSE.list().filter(b => b.seenNow).length : 0,
             cam: CAMGOV.telemetry(), clinic: PERF.clinic || undefined },
     cursors: Object.keys(cursors).sort().filter(k => cursors[k].seenNow).map(k => {
       const c = cursors[k];

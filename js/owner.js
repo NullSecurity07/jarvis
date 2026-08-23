@@ -13,11 +13,13 @@ export const TUNE_OWNER_DEFAULTS = {
   enabled: true, matchDist: 0.5, graceMs: 1500, livenessMs: 8000,
   closeK: 1.5, guestTimeoutMs: 10000, handReach: 3.0,
   spanMin: 0.35, spanMax: 2.5, thumbsUpMs: 1000, enrollMs: 3000,
+  geomTol: 0.18, driftMax: 0.35, driftEveryMs: 600000, driftCap: 16, propTol: 0.25,
 };
 export const TUNE_FACE_DEFAULTS = {
   everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4,
   blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25,
 };
+export const TUNE_POSE_DEFAULTS = { enabled: false, everyNthFrame: 2, wristTol: 0.12 };
 
 // liveness: the owner candidate blinked or moved their head within
 // livenessMs, eyes open enough to trust the read. Shared by decide() (the
@@ -28,6 +30,42 @@ export function isLive(f, tune, now) {
   const T = { ...TUNE_OWNER_DEFAULTS, ...((tune && tune.owner) || {}) };
   return f.eyeOpen > F.eyeOpenMin &&
     !!((f.blinkT && now - f.blinkT < T.livenessMs) || (f.moveT && now - f.moveT < T.livenessMs));
+}
+
+// THE GEOMETRY GATE (beard-proof corroboration): a small vector of
+// bone-structure ratios (js/faces.js computes it, normalised by IPD) that a
+// beard trim, new glasses or lighting cannot move. geomDist is a plain mean
+// absolute relative difference, b (the owner's enrolled vector) as the
+// denominator. geomOk only ever REJECTS a descriptor match the bone
+// structure contradicts — every unjudgeable case (no enrolled geometry, no
+// current geometry, a non-frontal frame) passes through untouched.
+export function geomDist(a, b) {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]) / Math.max(Math.abs(b[i]), 1e-6);
+  return s / a.length;
+}
+export function geomOk(f, owner, tune) {
+  const T = { ...TUNE_OWNER_DEFAULTS, ...((tune && tune.owner) || {}) };
+  if (!owner || !owner.geom) return true;      // nothing enrolled to corroborate against
+  if (!f || !f.geom) return true;               // this frame's geometry is unreadable
+  if (!f.geomOk) return true;                    // not frontal enough to trust the ratios
+  if (T.geomTol <= 0) return true;                // 0 = gate disabled
+  return geomDist(f.geom, owner.geom) < T.geomTol;
+}
+
+// TEMPLATE DRIFT (Task 11 Part B): which vector to drop when the owner's
+// drift-appended set goes over the cap. The first `seeds` vecs (the
+// enrolment window) are never dropped — a bad drift can never fully
+// replace the real you — so the OLDEST non-seed vector goes instead. The
+// stage-side writer (stage.html) decides WHEN to append; this decides WHAT
+// the resulting array looks like — pure, no DOM/timers.
+export function driftAppend(vecs, seeds, vec, cap) {
+  const out = vecs.concat([vec]);
+  while (out.length > cap) {
+    if (seeds < out.length) out.splice(seeds, 1);
+    else out.shift();
+  }
+  return out;
 }
 
 export function decide(input, tune, prev = {}) {
@@ -65,10 +103,15 @@ export function decide(input, tune, prev = {}) {
     st.locked = true; if (!st.lockedSince) st.lockedSince = now;
     return verdict(true, "identity model not loaded", null);
   }
-  // 3. the owner candidate: best-scoring face under the match bar, and LIVE
+  // 3. the owner candidate: best-scoring face under the match bar, LIVE,
+  // and corroborated by THE GEOMETRY GATE (Part A) — geometry can only
+  // REJECT a descriptor match the bone structure contradicts, never admit
+  // one the descriptor rejected (geomOk(...) passes through every
+  // unjudgeable case untouched, see js/owner.js's geomOk doc).
   let owner = null;
   for (const f of faces) {
-    if (Number.isFinite(f.score) && f.score < T.matchDist && (!owner || f.score < owner.score)) owner = f;
+    if (Number.isFinite(f.score) && f.score < T.matchDist && geomOk(f, input.owner, tune) &&
+        (!owner || f.score < owner.score)) owner = f;
   }
   const live = !!owner && isLive(owner, tune, now);
   if (live) {
@@ -122,10 +165,49 @@ export function decide(input, tune, prev = {}) {
     if (!approvals[id] && !others.some(f => String(f.id) === id)) delete st.away[id];
   }
   // 6. hands. Alone = every hand is the owner's (today's behaviour, no tests)
+  const candidates = faces.some(f => f.id === O.id) ? faces : faces.concat([{ ...O, score: 0 }]);
+  // POSE-LINKED HANDS (Task 11 Part C): a body's wrist claims a hand before
+  // the face-distance guess ever runs — additive, poses:[] (or the module
+  // disabled) falls straight through to today's rule unchanged.
+  const P = { ...TUNE_POSE_DEFAULTS, ...((tune && tune.pose) || {}) };
+  const poses = input.poses || [];
+  function poseForHand(h) {
+    const claims = [];
+    for (const ps of poses) {
+      let d = Infinity;
+      if (ps.wristL && ps.wristL.vis > 0.5) d = Math.min(d, Math.hypot(h.wx - ps.wristL.x, h.wy - ps.wristL.y));
+      if (ps.wristR && ps.wristR.vis > 0.5) d = Math.min(d, Math.hypot(h.wx - ps.wristR.x, h.wy - ps.wristR.y));
+      if (d < P.wristTol) claims.push({ ps, d });
+    }
+    if (!claims.length) return null;
+    if (claims.length > 1 && Number.isFinite(input.owner && input.owner.prop)) {
+      // BODY PROPORTION (prop) is a TIE-BREAKER only — it never rejects a
+      // hand on its own, it only picks among bodies that already claimed it
+      claims.sort((a, b) => Math.abs(a.ps.prop - input.owner.prop) - Math.abs(b.ps.prop - input.owner.prop));
+      return claims[0].ps;
+    }
+    claims.sort((a, b) => a.d - b.d);
+    return claims[0].ps;
+  }
+  function faceForPose(ps) {
+    let best = null, bd = Infinity;
+    for (const f of candidates) {
+      const w = Math.max(f.w, 1e-3);
+      const d = ps.nose ? Math.hypot(ps.nose.x - f.cx, ps.nose.y - f.cy) : Infinity;
+      if (d < 1.2 * w && d < bd) { bd = d; best = f; }
+    }
+    return best;
+  }
   for (const h of hands) {
     if (others.length === 0) { handRole[h.id] = "owner"; continue; }
+    const ps = poseForHand(h);
+    if (ps) {
+      const f = faceForPose(ps);
+      const r = f ? faceRole[f.id] : "none";
+      handRole[h.id] = (r === "owner" || r === "guest") ? r : "none";
+      continue;
+    }
     let best = null, bd = Infinity;
-    const candidates = faces.some(f => f.id === O.id) ? faces : faces.concat([{ ...O, score: 0 }]);
     for (const f of candidates) {
       const w = Math.max(f.w, 1e-3);
       const d = Math.hypot(h.wx - f.cx, h.wy - f.cy) / w;

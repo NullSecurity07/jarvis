@@ -9,6 +9,13 @@ import { matchScore } from "./identity.js";
 
 const MODEL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const IRIS_L = 468, IRIS_R = 473;            // iris centres in the 478-point mesh
+// THE GEOMETRY GATE (Task 11 Part A): canonical 478-point mesh indices for
+// bone-structure ratios a beard trim / new glasses / lighting cannot move.
+const EYE_OUT_L = 33, EYE_OUT_R = 263;       // outer eye corners
+const NOSE_BRIDGE = 168, NOSE_TIP = 1;
+const CHEEK_L = 234, CHEEK_R = 454;
+const BROW = 105, EYE_CTR = 159, CHIN = 152;
+const GEOM_FRONTAL_DEG = 20;                 // |yaw|/|pitch| under this = ratios are comparable
 
 export function createFaces({ FaceLandmarker, vision, identity, tune, owner }) {
   const F = () => tune.face, faces = new Map();
@@ -35,6 +42,17 @@ export function createFaces({ FaceLandmarker, vision, identity, tune, owner }) {
   function blendOf(bs, name) {
     const c = bs && bs.categories && bs.categories.find(k => k.categoryName === name);
     return c ? c.score : 0;
+  }
+  function geomOf(pts) {            // -> [eyeW, noseL, eyeNose, cheek, browEye, eyeJaw]/ipd, or null
+    const L = pts[IRIS_L], R = pts[IRIS_R];
+    const ipd = Math.hypot(R.x - L.x, R.y - L.y);
+    if (!(ipd > 1e-6)) return null;
+    const d = (a, b) => Math.hypot(pts[a].x - pts[b].x, pts[a].y - pts[b].y);
+    const mx = (L.x + R.x) / 2, my = (L.y + R.y) / 2;   // eye midpoint (the two iris centres)
+    const dMid = (i) => Math.hypot(mx - pts[i].x, my - pts[i].y);
+    const g = [d(EYE_OUT_L, EYE_OUT_R) / ipd, d(NOSE_BRIDGE, NOSE_TIP) / ipd, dMid(NOSE_TIP) / ipd,
+               d(CHEEK_L, CHEEK_R) / ipd, d(BROW, EYE_CTR) / ipd, dMid(CHIN) / ipd];
+    return g.every(Number.isFinite) ? g : null;
   }
   function assign(lms, now) {       // detection index -> stable face id
     const live = [...faces.values()].filter(f => now - f.seenT <= F().graceMs);
@@ -121,6 +139,8 @@ export function createFaces({ FaceLandmarker, vision, identity, tune, owner }) {
       if (Math.hypot(p.yaw - f._yaw, p.pitch - f._pitch) > F().moveDeg) { f.moveT = now; f._yaw = p.yaw; f._pitch = p.pitch; }
       f.yaw = p.yaw; f.pitch = p.pitch;
       f.attention = Math.abs(p.yaw) < F().attYaw && Math.abs(p.pitch) < F().attPitch && f.eyeOpen > F().eyeOpenMin;
+      f.geom = geomOf(pts);          // THE GEOMETRY GATE: null when a landmark's missing
+      f.geomOk = Math.abs(p.yaw) < GEOM_FRONTAL_DEG && Math.abs(p.pitch) < GEOM_FRONTAL_DEG;
       f.seenT = now; f.seenNow = true;
       score(f, video, now);
     });
