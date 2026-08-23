@@ -90,10 +90,13 @@ A `Desks` orb turns the board into a live view of your own machine — tap it an
   "fps": 4,
   "minGapMs": 180,
   "maxStreams": 3,
+  "aliveMs": 1500,
   "display": ":0",
   "xauthority": "/run/user/1000/lyxauth"
 }
 ```
+
+`aliveMs` bounds how often a live card's window is re-confirmed to still exist while its captures keep succeeding — a failed capture always confirms right away; this just stops a healthy stream from spawning `i3-msg` every single frame on a board meant to stay up all day.
 
 **i3/X11 only.** Workspaces and windows come from `i3-msg`; captures come from `maim`, which can grab any window — including ones on a workspace that isn't currently visible — without switching to it first. Missing the `desks` key entirely, or `"enabled": false`, disables the feature completely: every `/desks*` endpoint 404s, and the orb never appears.
 

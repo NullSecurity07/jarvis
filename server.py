@@ -80,7 +80,8 @@ would land) — the user opts in by naming a root.
 own machine — every workspace and window becomes something you can put
 on the glass:
   "desks": { "enabled": true, "fps": 4, "minGapMs": 180, "maxStreams": 3,
-             "display": ":0", "xauthority": "/run/user/1000/lyxauth" }
+             "aliveMs": 1500, "display": ":0",
+             "xauthority": "/run/user/1000/lyxauth" }
 (absent key = disabled; every /desks* endpoint 404s). Read-only w.r.t.
 your windows except an allowlist of i3 commands the page can send
 (focus/workspace/move/layout/fullscreen — never kill); captures never
@@ -149,6 +150,12 @@ def _read_config():
     desks.setdefault("fps", 4)
     desks.setdefault("minGapMs", 180)
     desks.setdefault("maxStreams", 3)
+    # fix round 3: how often a /desks/stream loop re-confirms (via i3-msg)
+    # that its window still exists, WHILE captures keep succeeding — a
+    # failed capture always confirms immediately regardless of this gap
+    # (see the stream loop). Bounds the steady-state i3-msg cost to
+    # ~1000/aliveMs calls/sec per stream instead of one every frame.
+    desks.setdefault("aliveMs", 1500)
     desks.setdefault("display", ":0")
     desks.setdefault("xauthority", "/run/user/1000/lyxauth")
     try:
@@ -163,6 +170,10 @@ def _read_config():
         desks["maxStreams"] = max(1, min(10, int(desks["maxStreams"])))
     except Exception:
         desks["maxStreams"] = 3
+    try:
+        desks["aliveMs"] = max(250, min(10000, int(desks["aliveMs"])))
+    except Exception:
+        desks["aliveMs"] = 1500
     cfg["desks"] = desks
     return cfg
 
@@ -1209,22 +1220,30 @@ class Handler(SimpleHTTPRequestHandler):
                                  "multipart/x-mixed-replace; boundary=jarvisframe")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
-                period = 1.0 / max(1, min(10, int(cfg.get("desks", {}).get("fps", 4))))
+                d = cfg.get("desks", {})
+                period = 1.0 / max(1, min(10, int(d.get("fps", 4))))
+                alive_gap = int(d.get("aliveMs", 1500)) / 1000
+                last_check = time.monotonic()   # already confirmed once, above
                 while True:
-                    # fix round 2: the snapshot at the top of this handler
-                    # was taken ONCE, before the loop, and never re-checked
-                    # — a closed window's stream just kept re-sending its
-                    # last cached frame (or nothing) forever, silently
-                    # occupying one of only maxStreams slots. Re-checking
-                    # existence every tick (cheap: get_workspaces+get_tree
-                    # over the local i3 IPC socket) ends the response the
-                    # moment the window is gone, releasing the slot via the
-                    # finally below — the page notices on its own poll
-                    # (desksHealthCheck) and closes the dead card instead
-                    # of showing a frozen frame forever.
-                    if not any(w["xid"] == xid for w in _desks_snapshot()["wins"]):
-                        break
                     png, ok = _desks_capture(xid)
+                    now = time.monotonic()
+                    # fix round 2: a closed window's stream used to just
+                    # keep re-sending its last cached frame (or nothing)
+                    # forever, silently occupying one of only maxStreams
+                    # slots. fix round 3: checking existence EVERY tick
+                    # (get_workspaces+get_tree over the i3 IPC socket) was
+                    # an always-on cost scaling with fps*maxStreams on a
+                    # board meant to run all day — so this now confirms on
+                    # two triggers instead of every frame: immediately
+                    # when a capture just FAILED (strong evidence the
+                    # window is gone — costs nothing while healthy), and
+                    # otherwise at most once per desks.aliveMs as a
+                    # backstop (covers a stale minGapMs cache hit still
+                    # reporting ok=True after the window's actually gone).
+                    if not ok or now - last_check >= alive_gap:
+                        last_check = now
+                        if not any(w["xid"] == xid for w in _desks_snapshot()["wins"]):
+                            break
                     if png:
                         self.wfile.write(
                             b"--jarvisframe\r\nContent-Type: image/png\r\n"
