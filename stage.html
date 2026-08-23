@@ -182,13 +182,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           border-bottom:1px solid rgba(111,229,214,0.12); font-size:18px; }
   .brow .bico { color:#8ff0e4; width:28px; text-align:center; flex:none;
                 font-size:20px; }
-  .brow.dir .btxt { color:#8ff0e4; font-weight:600; letter-spacing:0.02em; }
+  .brow.dir .btxt, .brow.ws .btxt { color:#8ff0e4; font-weight:600; letter-spacing:0.02em; }
   .brow.note .btxt, .brow.prop .btxt, .brow.widget .btxt,
-  .brow.file .btxt, .brow.up .btxt { color:#ecfffa; }
+  .brow.file .btxt, .brow.up .btxt, .brow.win .btxt { color:#ecfffa; }
   .brow .btxt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
   .brow .bkind { flex:none; font:11px "SF Mono",Menlo,monospace; letter-spacing:0.06em;
                  color:#8ff0e4; opacity:0.75; border:1px solid rgba(111,229,214,0.4);
                  border-radius:4px; padding:2px 6px; }
+  /* THE DESKS (Task 17): a fat, dedicated tap target on a window row —
+     tapping it focuses instead of staging the row as a live card. */
+  .brow.win .bfocus { flex:none; font:11px "SF Mono",Menlo,monospace;
+                 letter-spacing:0.06em; text-transform:uppercase;
+                 color:#8ff0e4; opacity:0.9; border:1px solid rgba(111,229,214,0.5);
+                 border-radius:4px; padding:8px 12px; margin-left:8px; }
   /* THE TAP FLASH (2026-08-13, the mirror-doctrine softener): the row
      you tap pulses full-width on BOTH pages. Rows span the pane and
      vertical never mirrors, so the pulse sits directly under the
@@ -230,6 +236,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                           box-shadow:0 6px 30px rgba(0,0,0,0.4); }
   .card.mediacard video, .card.mediacard audio { width:100%; border-radius:8px;
                                                   display:block; margin-top:4px; }
+  /* THE DESKS (Task 17): a live i3 window, flat and crisp — the rim
+     treatment stays on the .panel FRAME only, never on the content
+     (no relief, no scan sweep — this is plain img markup, not a
+     three.js scene). */
+  .panel.desk { width:640px; height:460px; }
+  .panel.desk .body { display:flex; align-items:center; justify-content:center;
+                      padding:0; overflow:hidden; background:#04100e; }
+  .panel.desk .body img { display:block; max-width:100%; max-height:100%; }
   .cursor { position:absolute; width:28px; height:28px; margin:-14px 0 0 -14px;
             border-radius:50%; border:2.5px solid rgba(111,229,214,0.9);
             background:rgba(111,229,214,0.12); pointer-events:none; z-index:999; }
@@ -1736,6 +1750,21 @@ function applyCmds(cmds) {
           presentItem(p || t);
         } else presentItem(t);
       }
+    } else if (c.a === "desk" && (c.xid != null || c.ws != null)) {
+      // THE DESKS, staged by the assistant (Task 17): xid/ws already
+      // validated server-side against the live i3 tree — a fresh /desks
+      // fetch (not the possibly-stale cached DESKS var) keeps class/
+      // title accurate, then stage it exactly like a user's row tap.
+      fetch("/desks").then(r => r.ok ? r.json() : null).then(d => {
+        if (!d) return;
+        if (c.xid != null) {
+          const w = (d.wins || []).find(x => x.xid === c.xid);
+          if (w) stageDesk(w.xid, w.cls + (w.title ? " · " + w.title : ""));
+        } else {
+          (d.wins || []).filter(x => x.ws === c.ws).forEach(w =>
+            stageDesk(w.xid, w.cls + (w.title ? " · " + w.title : "")));
+        }
+      }).catch(() => {});
     }
   });
 }
@@ -3001,6 +3030,19 @@ function beginGrab(c, i, cur) {
       c.mode = "move";
       c.holdX = cur.x; c.holdY = cur.y; c.holdT = performance.now();
       c.tapX = cur.x; c.tapY = cur.y;   // ring-tap discrimination
+    } else if (c.type === "desk") {
+      // THE DESKS (Task 17): pinch-drag MOVE + hold-to-rotate like any
+      // card — no scroll mode, there's nothing to scroll on a live
+      // desktop. The BAR is still its own grab/tap zone (like panels/
+      // browsers) so endGrab's tap-close / double-tap-focus has a place
+      // to live without a second gesture to invent.
+      c.mode = "move";
+      c.holdX = cur.x; c.holdY = cur.y; c.holdT = performance.now();
+      c.tapX = cur.x; c.tapY = cur.y;
+      const barEl = c.el.querySelector(".bar");
+      const barR = barEl && barEl.getBoundingClientRect();
+      c.barGrab = !!(barR && cur.y >= barR.top && cur.y <= barR.bottom &&
+                    cur.x >= barR.left && cur.x <= barR.right);
     } else {
       // GLASS ERA: every movable item arms the hold-to-rotate timer
       c.mode = "move";
@@ -3051,6 +3093,31 @@ function endGrab(c, i, cur) {
       const gTrav = Math.hypot(cur.x - (c.tapX || cur.x),
                                cur.y - (c.tapY || cur.y));
       if (gMs < 350 && gTrav < 24) killItem(c);
+      c.barGrab = false;
+    }
+    // THE DESKS (Task 17): the bar-tap idiom above, split by timing — a
+    // quick tap closes after a short grace window; a SECOND quick tap on
+    // the bar within that window cancels the close and focuses the
+    // window instead (workspace-switch-then-focus, via deskFocus). This
+    // whole block only runs on the same discriminated quick, near-still
+    // release every other bar-tap here uses — never a clap, never a fling.
+    if (c.type === "desk" && c.barGrab && !cur.probKill) {
+      const dMs = performance.now() - (cur.grabT || 0);
+      const dTrav = Math.hypot(cur.x - (c.tapX || cur.x),
+                               cur.y - (c.tapY || cur.y));
+      if (dMs < 350 && dTrav < 24) {
+        const tapNow = performance.now();
+        if (tapNow - (c._lastBarTap || 0) < 400) {
+          c._lastBarTap = 0;
+          deskFocus(c.def.xid);
+        } else {
+          c._lastBarTap = tapNow;
+          setTimeout(() => {
+            if (c._lastBarTap && performance.now() - c._lastBarTap >= 400 &&
+                c.el.isConnected) killItem(c);
+          }, 420);
+        }
+      }
       c.barGrab = false;
     }
     // GESTURE v3 (2026-08-14, Jared's spec — "make it a single pinch"):
@@ -3171,6 +3238,13 @@ function killItem(c) {
   c.grabbedBy = [];
   c.el.classList.remove("grabbed");
   c.flying = false;
+  if (c.type === "desk") {
+    // STREAM HYGIENE (Task 17): drop the <img> src NOW, not after the
+    // ~0.35s recede animation — the browser only ends the server-side
+    // MJPEG loop once the request itself is aborted.
+    const img = c.el.querySelector("img");
+    if (img) img.src = "";
+  }
   c.anim = { k: "out", t: 0 };
 }
 
@@ -4974,9 +5048,10 @@ function pushState(now) {
         title: i.type === "panel"
                ? i.def.file.split("/").pop().replace(".md", "") : i.def.title,
         body: (i.type === "card" || i.type === "orb") ? i.def.body : undefined,
-        src: (i.type === "img" || i.type === "model" || i.type === "media")
-             ? i.def.src : undefined,
+        src: (i.type === "img" || i.type === "model" || i.type === "media" ||
+              i.type === "desk") ? i.def.src : undefined,
         mk: i.type === "media" ? i.def.mkind : undefined,
+        dxid: i.type === "desk" ? i.def.xid : undefined,
         w: i.type === "widget" ? i.def.w : undefined,
         mm: i.type === "model" ? i.def.mmode : undefined,
         lf: i.type === "model" ? i.def.lift : undefined,
@@ -5112,6 +5187,19 @@ async function renderLoop() {
             (it.mk === "audio"
               ? `<audio src="${escT(it.src)}" controls preload="metadata"></audio>`
               : `<video src="${escT(it.src)}" controls preload="metadata" playsinline></video>`);
+        } else if (it.type === "desk") {
+          // THE DESKS (Task 17): the render mirror polls STILLS via
+          // /desks/shot instead of opening its own /desks/stream — the
+          // tracker page already holds one live MJPEG connection per
+          // staged card; a second one for the SAME card would silently
+          // double the pressure on desks.maxStreams for a single card
+          // the user staged once. A cached still every ~500ms is plenty
+          // for a broadcast overlay, and it hits the server's cheap
+          // per-xid capture cache instead of a second persistent loop.
+          el = document.createElement("div");
+          el.className = "panel desk";
+          el.innerHTML = `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
+                         `<div class="body"><img alt=""></div>`;
         } else {
           el = document.createElement("div");
           if (it.ptype === "pdf") {
@@ -5140,6 +5228,12 @@ async function renderLoop() {
         if (it.type === "widget" && it.w === "ring")
           RINGS.set(it.id, ringCanvas(el));   // the ring animates locally
         if (it.ptype === "pdf") ri.pdfPage = 0;   // force the first draw below
+        if (it.type === "desk") {
+          const dimg = el.querySelector("img");
+          ri._deskT = setInterval(() => {
+            dimg.src = "/desks/shot?xid=" + it.dxid + "&t=" + Date.now();
+          }, 500);
+        }
       }
       ri.x += (rx(it.x) * innerWidth - ri.x) * 0.5;
       ri.y += (it.y * innerHeight - ri.y) * 0.5;
@@ -5222,6 +5316,7 @@ async function renderLoop() {
       if (!ids.has(+k)) {
         if (rItems[k].msc) disposeScene(rItems[k].msc);
         if (rItems[k].pdfPage != null) pdfCleanup(+k);
+        if (rItems[k]._deskT) clearInterval(rItems[k]._deskT);
         rItems[k].el.remove(); delete rItems[k]; } });
     renderRings();               // the ring draws its own frames
   } catch (e) {}

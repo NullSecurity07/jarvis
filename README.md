@@ -65,7 +65,7 @@ Keys on the tracker: `D` debug overlay · `P` pose sampler · `K` camera clinic 
 ## Wire in an AI
 
 - **The ring is a face.** Write `thinking` / `idle` / `listening` / `speaking` to `state/state` and the ring reacts (`state/mood.json`, `state/wave.json` optional; format at the top of `server.py`). Claude Code: a `UserPromptSubmit` hook writing `thinking` and a `Stop` hook writing `idle`.
-- **The board is a stage.** `bin/board.sh '{"a":"present","title":"THE PLAN","body":"..."}'` flies it center stage, spotlit. Also `add_card`, `add_img`/`hand` (`"src":"misc/x.png"` from the airlock), `open_file` (`{"root":0,"rel":"notes/todo.txt"}` — opens a file from a configured [files root](#browse-your-files), jailed the same way a tap is), `explode`, `assemble`, `yank`, `hover`, `reset`, `clear`, `clinic`, `light`, `dump`, `reload`. The server enforces the action allowlist and the media jail. `board.sh` prints **`landed #id`** when the tracker actually applied the command, or `queued` with the board's freshness (`--wait ms` to block longer).
+- **The board is a stage.** `bin/board.sh '{"a":"present","title":"THE PLAN","body":"..."}'` flies it center stage, spotlit. Also `add_card`, `add_img`/`hand` (`"src":"misc/x.png"` from the airlock), `open_file` (`{"root":0,"rel":"notes/todo.txt"}` — opens a file from a configured [files root](#browse-your-files), jailed the same way a tap is), `desk` (`{"xid":N}` or `{"ws":N}` — stages a live [i3 window or workspace](#your-desktops-on-the-glass), jailed to the current i3 tree), `explode`, `assemble`, `yank`, `hover`, `reset`, `clear`, `clinic`, `light`, `dump`, `reload`. The server enforces the action allowlist and the media jail. `board.sh` prints **`landed #id`** when the tracker actually applied the command, or `queued` with the board's freshness (`--wait ms` to block longer).
 - **`bin/board-state.sh`** prints what is on the board right now.
 - **`GET /state`** → `perf` (fps, inference ms, camera governor, clinic table), cursors, items, `ack`.
 
@@ -79,6 +79,29 @@ The board belongs to one face. On first boot, the one face alone in front of the
 - Numbers: `tuning.json → owner` / `face` (`matchDist` is the identity bar; the D overlay shows every face's live score). `?lock=0` on the URL, or `bin/board.sh '{"a":"lock","on":0}'`, overrides the lock locally; `{"a":"guest","allow":1|0}` and `{"a":"enroll"}` (forget the owner) are the other commands; `bin/board-state.sh` prints the lock state and every face first.
 - Identity runs in the page (face-api.js in a Web Worker, models from jsdelivr on first run, cached after) — nothing leaves the machine. If the model can't load, an enrolled board stays LOCKED and says why.
 - Measured on this rig: identity is ~20 ms per descriptor (in the worker, off the render thread); the owner's live match score sits 0.22–0.45 against the default `matchDist` 0.5; the face tracker itself costs ~12–15 ms/frame and the stage automatically halves its rate if hands+face together exceed the frame budget. Lock engages ~1.5 s after the owner leaves frame and clears on the next 2 live frames back.
+
+## Your desktops on the glass
+
+A `Desks` orb turns the board into a live view of your own machine — tap it and every workspace unfolds, each with its windows (`class · title`); tap a window to stage it as a LIVE card (an actual updating desktop, not a snapshot), or tap its small **focus** button to switch to it directly. A live card's bar works like a note's: tap once to close it, or double-tap it to focus that window instead. Enable it in `jarvis.json`:
+
+```json
+"desks": {
+  "enabled": true,
+  "fps": 4,
+  "minGapMs": 180,
+  "maxStreams": 3,
+  "display": ":0",
+  "xauthority": "/run/user/1000/lyxauth"
+}
+```
+
+**i3/X11 only.** Workspaces and windows come from `i3-msg`; captures come from `maim`, which can grab any window — including ones on a workspace that isn't currently visible — without switching to it first. Missing the `desks` key entirely, or `"enabled": false`, disables the feature completely: every `/desks*` endpoint 404s, and the orb never appears.
+
+**Control is limited to i3 commands** — `workspace`, `focus`, `move`, `layout`, `fullscreen` — sent through a server-side allowlist, never free-form text. There's no synthetic mouse or keyboard input (this machine doesn't have `xdotool`), and `kill` is not implemented: gesture-driven window control never closes anything for you. Desk cards are their own item type, deliberately flat and un-relief'd — a live desktop rendered as an embossed 3D scene would be unreadable, unlike a staged still image.
+
+**Privacy.** Every capture is served from `/desks/shot` and `/desks/stream` on localhost only, exactly like everything else here — nothing leaves your machine. The board's own window (and the status bar) are always excluded from the workspace/window list, so the glass never mirrors itself.
+
+`bin/board.sh '{"a":"desk","xid":N}'` (a specific window) or `'{"a":"desk","ws":1}'` (every window on a workspace) stages a live card from your AI, jailed the same way a tap is — the server re-checks the xid/workspace against the current i3 tree before doing anything.
 
 ## Streaming
 
