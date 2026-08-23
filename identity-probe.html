@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<!-- identity-probe.html — does face-api run here, in a worker or on the main
+     thread, and how long does one descriptor take? Open via the server:
+     http://127.0.0.1:8794/identity-probe.html  (camera needed) -->
+<meta charset="utf-8"><title>jarvis identity probe</title>
+<body style="background:#04191c;color:#dff3ee;font:14px/1.5 ui-monospace,monospace;padding:18px">
+<h1 style="font-size:18px;letter-spacing:.18em;color:#6fe3c9">JARVIS IDENTITY PROBE</h1>
+<video id="v" autoplay playsinline muted width="320" height="180" style="border:1px solid #14484f"></video>
+<canvas id="crop" width="160" height="160" style="border:1px solid #14484f;margin-left:8px"></canvas>
+<pre id="out">starting…</pre>
+<script type="module">
+import { createIdentity, dist } from "./js/identity.js";
+const out = document.getElementById("out"), log = (s) => { out.textContent += "\n" + s; };
+const v = document.getElementById("v"), crop = document.getElementById("crop");
+const mode = new URLSearchParams(location.search).get("mode");   // ?mode=main forces the fallback
+const ID = createIdentity({ forceMain: mode === "main" });
+log(`loading face-api (${mode === "main" ? "main thread forced" : "worker first"})…`);
+const t0 = performance.now();
+const ok = await ID.ready;
+log(`ready=${ok} mode=${ID.mode} in ${(performance.now() - t0) | 0}ms ${ID.error ? "error: " + ID.error : ""}`);
+if (!ok) throw new Error("identity unavailable");
+v.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+await new Promise(r => v.onloadedmetadata = r);
+log("camera on — look at it; sampling 10 descriptors of the centre crop…");
+const cx = crop.getContext("2d");
+const vecs = [];
+for (let k = 0; k < 10; k++) {
+  // centre crop (the stage will crop the tracked face box instead)
+  const s = Math.min(v.videoWidth, v.videoHeight) * 0.6;
+  cx.drawImage(v, (v.videoWidth - s) / 2, (v.videoHeight - s) / 2, s, s, 0, 0, 160, 160);
+  const oc = new OffscreenCanvas(160, 160); oc.getContext("2d").drawImage(crop, 0, 0);
+  const vec = await ID.describe(oc);
+  log(`#${k} ${vec ? "descriptor ok" : "no face in crop"} ${ID.perf.ms.toFixed(0)}ms`);
+  if (vec) vecs.push(vec);
+  await new Promise(r => setTimeout(r, 400));
+}
+if (vecs.length >= 2) {
+  let mx = 0; for (let i = 1; i < vecs.length; i++) mx = Math.max(mx, dist(vecs[0], vecs[i]));
+  log(`same-face spread: max distance ${mx.toFixed(3)} (matchDist 0.5 must stay above this)`);
+}
+log("done");
+</script>
