@@ -55,6 +55,10 @@
     "_": "POSE-LINKED HANDS (Task 11 Part C, MediaPipe PoseLandmarker). enabled=false (default) means the stage never even constructs the model — no download, no GPU cost; flip it on once the frame budget's been measured live. everyNthFrame = run the pose model every Nth video frame, starting point (the stage drops it to every 3rd itself under sustained frame-budget pressure, same hysteresis as THE FACES). wristTol = max normalized distance from a hand's wrist to a body's wrist for that body to claim the hand.",
     "enabled": false, "everyNthFrame": 2, "wristTol": 0.12
   },
+  "hands2": {
+    "_": "THE TWO-SIDED SEARCH: when a frame comes back with fewer than 2 hands and a face is tracked, re-detect on a crop beside the face so the missing hand fills the model's input instead of a few pixels of a downscaled full frame. sideW/sideH = the region's size in face widths/heights. conf = detection confidence for the crop pass (lower than the full-frame wall is safe: the crop excludes the busy background). dedupe = wrist distance below which a rescued hand is the same as a full-frame hand. maxPerFrame = how many rescue detects one frame may run. everyNthFrame = only attempt a rescue every Nth frame (1 = every frame).",
+    "enabled": true, "sideW": 1.6, "sideH": 2.4, "conf": 0.5, "dedupe": 0.08, "maxPerFrame": 1, "everyNthFrame": 1
+  },
   "image3d": {
     "_": "Every staged image becomes a 3D luminance relief in a three.js scene (rotatable, rim-lit, bloom-catching) instead of a flat glass card. depth = how far the brightest pixels push out, in units of the plane's half-height. seg = mesh subdivision per side (cost: seg^2 verts). alphaCut = texels with alpha below this are discarded (transparent PNGs keep their silhouette). rim = fresnel edge glow strength. flat = force the old flat card.",
     "enabled": true, "depth": 0.35, "seg": 160, "alphaCut": 0.35, "rim": 0.9, "flat": false

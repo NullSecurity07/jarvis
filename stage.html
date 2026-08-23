@@ -364,6 +364,7 @@ import { createIdentity } from "./js/identity.js";
 import { createFaces } from "./js/faces.js";
 import { createPose } from "./js/pose.js";
 import { decide, isLive, geomDist, driftAppend } from "./js/owner.js";
+import { sideRegions, mapLandmarks, coveredSides } from "./js/rescue.js";
 
 // ---- THE TUNING FILE. Every hand-fitted number the gates read lives in
 // tuning.json (GET /tuning) and lands here BEFORE any module code below
@@ -394,6 +395,8 @@ const TUNE_DEFAULTS = {
   face: { everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4,
           blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25 },
   pose: { enabled: false, everyNthFrame: 2, wristTol: 0.12 },
+  hands2: { enabled: true, sideW: 1.6, sideH: 2.4, conf: 0.5, dedupe: 0.08,
+            maxPerFrame: 1, everyNthFrame: 1 },
   image3d: { enabled: true, depth: 0.35, seg: 160, alphaCut: 0.35, rim: 0.9, flat: false },
 };
 function tuneMerge(base, over) {
@@ -440,6 +443,8 @@ const LOCK = {
   candidates: {},                        // face id -> chip element (Task 7)
   driftT: 0, driftBusy: false,           // last template-drift write / write in flight (Task 11 Part B)
 };
+// THE TWO-SIDED SEARCH (Task 15): ?hands2=0 = local override for one launch.
+const HANDS2_Q = Q.get("hands2") !== "0";
 let IDENT = null, FACES = null, POSE = null;
 
 // ?res=WxH — capture resolution (default 1920x1080, the tracking sweet
@@ -2853,6 +2858,104 @@ function makeLandmarker() {
     minTrackingConfidence: TUNE.detector.track });
 }
 
+// THE TWO-SIDED SEARCH (Task 15, "hard to detect right" — the user's right
+// hand loses first to a downscaled full frame). When a frame comes back
+// with fewer than 2 hands and a face is tracked, crop a region beside the
+// face (js/rescue.js: sideRegions) and re-detect on JUST that crop, so the
+// missing hand fills the model's input instead of a few backlit pixels of
+// the whole frame. Mapped back into full-frame coordinates and appended to
+// res.landmarks/handedness/worldLandmarks BEFORE HANDS.assign runs, so
+// identity/smoothing/every gesture downstream never knows the difference.
+//
+// A SEPARATE lazily-built HandLandmarker instance, not the shared one:
+// detectForVideo's VIDEO mode assumes a monotonically-increasing timestamp
+// over ONE continuous visual stream and (like the classic MediaPipe Hands
+// pipeline) leans on the previous call's result to skip re-running the
+// palm detector on a matching frame. Feeding the shared instance a crop of
+// a DIFFERENT image between two full-frame calls risks corrupting that
+// internal continuity — not necessarily a thrown error, so a clean console
+// wouldn't prove it's safe. A second `numHands: 1` instance sidesteps the
+// question entirely: its own clock, its own tracking state, never touches
+// the main landmarker's. Built on first actual rescue need, not at boot.
+const RESCUE2 = (() => {
+  const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+  const rc = document.createElement("canvas");
+  const rx = rc.getContext("2d", { alpha: false });
+  const S = { perf: { h2: { on: false, tries: 0, hits: 0, ms: 0 } },
+              every: 1, _slow: 0, _fast: 0, _n: 0, _side: "left",
+              _lm: null, _lmBusy: false };
+  function ensure() {           // lazy: only pay the model-load cost once it's needed
+    if (S._lm || S._lmBusy) return S._lm;
+    S._lmBusy = true;
+    HandLandmarker.createFromOptions(_vision, {
+      baseOptions: { modelAssetPath: MODEL, delegate: "GPU" },
+      numHands: 1, runningMode: "VIDEO",
+      minHandDetectionConfidence: TUNE.hands2.conf,
+      minHandPresenceConfidence: TUNE.hands2.conf,
+      minTrackingConfidence: TUNE.hands2.conf,
+    }).then(l => { S._lm = l; }).catch(() => { S._lmBusy = false; });
+    return null;
+  }
+  S.setEvery = (n) => { S.every = Math.max(1, n | 0); };
+  // res: this frame's main detect result (mutated in place). face: the
+  // tracked face to search beside, or null. src: the same detector input
+  // CAMGOV handed the main detect (raw video or the light-lifted copy).
+  S.tick = (res, face, src, now) => {
+    const T = TUNE.hands2;
+    S.perf.h2.on = !!(T.enabled && HANDS2_Q);
+    if (!S.perf.h2.on) return;
+    const lmsAll = res.landmarks || [];
+    if (lmsAll.length >= 2 || !face) return;   // nothing a rescue can help with — do nothing at all
+    S._n++;
+    if (S._n % S.every) return;                // everyNthFrame throttle (budget guard raises this)
+    const hands = lmsAll.map(l => ({ wx: l[0].x, wy: l[0].y }));
+    const cov = coveredSides(hands, face);
+    const order = [];
+    if (!cov.left && !cov.right) {              // both empty: alternate which side goes first
+      order.push(S._side, S._side === "left" ? "right" : "left");
+      S._side = S._side === "left" ? "right" : "left";
+    } else if (!cov.left) order.push("left");
+    else if (!cov.right) order.push("right");
+    if (!order.length) return;                  // both sides already covered
+    const regs = sideRegions(face, T);
+    const engine = ensure();
+    if (!engine) return;                        // model still loading — skip this frame
+    const W = src.videoWidth || src.width || 0, H = src.videoHeight || src.height || 0;
+    if (!W || !H) return;
+    let attempts = 0;
+    for (const want of order) {
+      if (attempts >= T.maxPerFrame) break;
+      const reg = regs[want];
+      if (!reg) continue;
+      const cw = Math.max(1, Math.round(reg.w * W)), ch = Math.max(1, Math.round(reg.h * H));
+      const scale = Math.min(1, 640 / Math.max(cw, ch));   // capped at 640 on the long edge
+      const pw = Math.max(1, Math.round(cw * scale)), ph = Math.max(1, Math.round(ch * scale));
+      if (rc.width !== pw || rc.height !== ph) { rc.width = pw; rc.height = ph; }
+      rx.drawImage(src, reg.x0 * W, reg.y0 * H, cw, ch, 0, 0, pw, ph);
+      attempts++; S.perf.h2.tries++;
+      const t0 = performance.now();
+      let out;
+      try { out = engine.detectForVideo(rc, now); } catch (e) { continue; }
+      const ms = performance.now() - t0;
+      S.perf.h2.ms = S.perf.h2.ms ? 0.9 * S.perf.h2.ms + 0.1 * ms : ms;
+      const lms = (out.landmarks || [])[0];
+      if (!lms) continue;
+      const mapped = mapLandmarks(lms, reg);
+      const wrist = mapped[0];
+      if (hands.some(h => Math.hypot(wrist.x - h.wx, wrist.y - h.wy) < T.dedupe)) continue;
+      const wl = (out.worldLandmarks || [])[0] || null;
+      const hdOut = (out.handedness || out.handednesses || [])[0] || null;
+      res.landmarks.push(mapped);
+      const hdArr = res.handedness || res.handednesses;
+      if (hdArr) hdArr.push(hdOut || [{ categoryName: want === "left" ? "Left" : "Right", score: 0 }]);
+      if (res.worldLandmarks) res.worldLandmarks.push(wl);
+      hands.push({ wx: wrist.x, wy: wrist.y });   // a hand we just rescued also blocks a duplicate on the other side
+      S.perf.h2.hits++;
+    }
+  };
+  return S;
+})();
+
 // THE BOARD FILE: the server persists what is on the glass (state/board.json);
 // after a reload the stage puts it back. ?fresh=1 boots empty.
 async function restoreBoard() {
@@ -3180,6 +3283,19 @@ async function boot() {
         else { poseSlow = 0; poseFast = 0; }
       }
       CLINIC.tick(now, res);               // the camera clinic's recorder
+      // THE TWO-SIDED SEARCH (Task 15): a rescue crop-detect beside the
+      // face, only when it can help (fewer than 2 hands, a face tracked).
+      // Appends into res.landmarks/handedness/worldLandmarks BEFORE
+      // HANDS.assign so everything downstream reads it as a normal hand.
+      RESCUE2.tick(res, FACES ? FACES.list().find(f => f.seenNow) : null, _src, now);
+      if (RESCUE2.perf.h2.on) {
+        // same budget-guard shape as THE FACES: sustained overrun -> every
+        // 2nd frame; sustained headroom -> back to every frame
+        const totH2 = PERF.det + (FACES ? FACES.perf.face : 0) + RESCUE2.perf.h2.ms;
+        if (totH2 > 26 && RESCUE2.every === 1) { RESCUE2._slow++; if (RESCUE2._slow > 90) { RESCUE2.setEvery(2); RESCUE2._slow = 0; } }
+        else if (totH2 < 20 && RESCUE2.every > 1) { RESCUE2._fast++; if (RESCUE2._fast > 150) { RESCUE2.setEvery(1); RESCUE2._fast = 0; } }
+        else { RESCUE2._slow = 0; RESCUE2._fast = 0; }
+      }
       const seen = new Set();
       const ids = HANDS.assign(res, now);    // stable ids (THE HANDS)
       // THE OWNER LOCK rules before any gesture reads a hand
@@ -4047,6 +4163,7 @@ async function boot() {
           `\nlock ${LOCK.verdict ? (LOCK.verdict.locked ? "LOCKED" : "open") + " · " + LOCK.verdict.why : "booting"}` +
           ` ident ${IDENT ? IDENT.mode : "-"} face ${FACES ? FACES.perf.face.toFixed(1) : "-"}ms/${FACES ? FACES.perf.every : "-"} id ${FACES ? FACES.perf.id.toFixed(0) : "-"}ms` +
           ` pose ${POSE ? POSE.perf.pose.toFixed(1) : "-"}ms/${POSE ? POSE.perf.every : "-"} bodies ${POSE ? POSE.list().filter(b => b.seenNow).length : "-"}` +
+          (RESCUE2.perf.h2.on ? `\nrescue L/R tries ${RESCUE2.perf.h2.tries} hits ${RESCUE2.perf.h2.hits} (${RESCUE2.perf.h2.ms.toFixed(1)}ms) every ${RESCUE2.every}` : "") +
           (FACES ? FACES.list().filter(f => f.seenNow).map(f =>
             `\n  face ${f.id} ${(LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "?"} score ${Number.isFinite(f.score) ? f.score.toFixed(3) : "-"}` +
             ` eye ${f.eyeOpen.toFixed(2)} blink ${((performance.now() - f.blinkT) / 1000).toFixed(1)}s yaw ${f.yaw.toFixed(0)} pitch ${f.pitch.toFixed(0)} att ${f.attention ? 1 : 0} w ${f.w.toFixed(2)}` +
@@ -4239,6 +4356,8 @@ function pushState(now) {
             clapN: PERF.clapN || 0, clapT: PERF.clapT || 0, clapHow: PERF.clapHow,
             pose: POSE ? +POSE.perf.pose.toFixed(1) : 0, poseEvery: POSE ? POSE.perf.every : 0,
             poseN: POSE ? POSE.list().filter(b => b.seenNow).length : 0,
+            h2: { on: RESCUE2.perf.h2.on, tries: RESCUE2.perf.h2.tries, hits: RESCUE2.perf.h2.hits,
+                  ms: +RESCUE2.perf.h2.ms.toFixed(2), every: RESCUE2.every },
             cam: CAMGOV.telemetry(), clinic: PERF.clinic || undefined },
     cursors: Object.keys(cursors).sort().filter(k => cursors[k].seenNow).map(k => {
       const c = cursors[k];
