@@ -32,6 +32,8 @@ Endpoints:
   GET  /note?f=N/<rel>         one note's text — read-only, JAILED
   GET  /props                  the media airlock as a browsable tree
   GET  /orb                    your assistant's live state (the ring reads it)
+  GET  /cam                    live V4L2 camera controls (Linux; the light
+  POST /cam                    governor + camera clinic set them here)
 
 Config lives in barehands.json next to this file:
   { "name": "Assistant", "port": 8794,
@@ -49,6 +51,9 @@ Your AI drives the ring by writing tiny files into ./state/ :
 Missing files are fine — the ring just idles.
 """
 import json
+import re
+import shutil
+import subprocess
 import time
 import urllib.parse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -95,6 +100,66 @@ _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
             "yank", "hover", "scroll_note", "widget", "explode", "assemble",
             "present")
 
+# ---- THE CAMERA BRIDGE (/cam). Chrome can't reach every V4L2 control
+# (exposure_dynamic_framerate, the ROI metering pair), and those are the
+# ones that decide whether a backlit room runs at 17fps or 30. The stage
+# sets them through here, live, while Chrome holds the device (uvcvideo
+# allows a second fd for controls). Allowlisted names + ranges only,
+# localhost only like everything else; no v4l2-ctl -> 501 and the page
+# simply runs telemetry-only.
+_CAM_DEV = str(CONFIG.get("camera_dev", "/dev/video0"))
+_CAM_CTRLS = {                      # name: (lo, hi) or None for the rect
+    "auto_exposure": (1, 3), "exposure_time_absolute": (4, 1250),
+    "exposure_dynamic_framerate": (0, 1), "backlight_compensation": (0, 2),
+    "brightness": (0, 255), "contrast": (0, 255), "gamma": (90, 150),
+    "sharpness": (0, 7), "saturation": (0, 100),
+    "region_of_interest_auto_ctrls": (0, 255),
+    "region_of_interest_rectangle": None,
+}
+_RECT_RE = re.compile(r"^\(\d{1,4},\d{1,4}\)/\d{1,4}x\d{1,4}$")
+
+
+def cam_read():
+    """Readback of every allowlisted control: {name: value-string}."""
+    if not shutil.which("v4l2-ctl"):
+        return None
+    r = subprocess.run(["v4l2-ctl", "-d", _CAM_DEV, "-C",
+                        ",".join(_CAM_CTRLS)], capture_output=True,
+                       text=True, timeout=3)
+    out = {}
+    for ln in r.stdout.splitlines():
+        k, _, v = ln.partition(":")
+        if _:
+            out[k.strip()] = v.strip().split(" ")[0]
+    return out
+
+
+def cam_set(pairs):
+    """Apply {name: value} (validated); returns the per-control errors."""
+    errs = {}
+    for k, v in pairs.items():
+        rng = _CAM_CTRLS.get(k, "NA")
+        if rng == "NA":
+            errs[k] = "not allowed"
+            continue
+        if rng is None:
+            v = str(v)
+            if not _RECT_RE.match(v):
+                errs[k] = "bad rect"
+                continue
+        else:
+            try:
+                v = int(v)
+                assert rng[0] <= v <= rng[1]
+            except Exception:
+                errs[k] = "out of range"
+                continue
+        r = subprocess.run(["v4l2-ctl", "-d", _CAM_DEV, "-c", f"{k}={v}"],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode or r.stderr.strip():
+            errs[k] = (r.stderr.strip() or f"rc {r.returncode}")[:120]
+    return errs
+
 
 class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -133,6 +198,26 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(out)))
             self.end_headers()
             self.wfile.write(out)
+            return
+        if self.path == "/cam":
+            # live camera controls from the stage (the light governor,
+            # the camera clinic) or from you: {"set": {name: value}}
+            try:
+                req = json.loads(body or b"{}")
+                pairs = req.get("set") or {}
+                assert isinstance(pairs, dict) and len(pairs) <= 16
+            except Exception:
+                self._json({"err": "bad request"}, 400)
+                return
+            if not shutil.which("v4l2-ctl"):
+                self._json({"err": "no v4l2"}, 501)
+                return
+            try:
+                errs = cam_set(pairs)
+                self._json({"ok": not errs, "errs": errs,
+                            "cam": cam_read()}, 200 if not errs else 400)
+            except Exception as e:
+                self._json({"err": str(e)[:200]}, 500)
             return
         if self.path == "/cmd":
             try:
@@ -261,6 +346,17 @@ class Handler(SimpleHTTPRequestHandler):
                 except Exception:
                     pass
             self._json(out)
+            return
+        if self.path == "/cam":
+            # the camera's live controls (the governor's readback channel)
+            try:
+                c = cam_read()
+                if c is None:
+                    self._json({"err": "no v4l2"}, 501)
+                else:
+                    self._json({"dev": _CAM_DEV, "cam": c})
+            except Exception as e:
+                self._json({"err": str(e)[:200]}, 500)
             return
         if self.path == "/state":
             self.send_response(200)
