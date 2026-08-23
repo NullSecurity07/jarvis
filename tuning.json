@@ -1,0 +1,42 @@
+{
+  "_about": "jarvis tuning — every gesture/camera number the stage reads at boot (GET /tuning). Fitted to THIS hand with the clinic (P sampler / K clinic / the tape). Edit, then `bin/board.sh '{\"a\":\"reload\"}'`. Missing keys fall back to the stage's built-in defaults (identical to these).",
+
+  "detector": {
+    "_": "MediaPipe HandLandmarker confidences. detect = fresh detection (the busy-background ghost wall, 0.65); presence/track = keeping a hand once found (0.45: a marginal second hand, once found, is kept).",
+    "detect": 0.65, "presence": 0.45, "track": 0.45
+  },
+
+  "hands": {
+    "_": "THE HANDS: identity + grace + smoothing. graceMs = how long a vanished hand stays a ghost (no tap/fling fires). gate = max wrist travel (normalized) to re-match an id. euro = One-Euro filter (minCutoff: lower = steadier at rest; beta: higher = sharper in motion). cursorLerp = the cursor's per-frame chase toward the pinch point (1 = raw).",
+    "graceMs": 200, "gate": 0.35,
+    "euro": { "minCutoff": 1.5, "beta": 8, "dCutoff": 1, "zMinCutoff": 1.0 },
+    "cursorLerp": 0.45
+  },
+
+  "pinch": {
+    "_": "THE PINCH. Three admitting signatures (any one): CONTRAST (frontal OK-sign: backMean-f8 > contrast && backMean > backFloor), PROFILE (aspect < profileAspect && tRel > profileT), CURLED (this hand's natural pinch: tRel > curledT && aspect > curledAspect; clinic 2026-08-23: pinch t .64-.70/a 2.80-3.41 vs fist t .12-.52/a 2.06-2.63). Touch = 2D gap ratio under the ceiling (gapFrontal / gapRotated for aspect < profileAspect) OR THE WORLD LANE: metric thumb-tip/index-tip distance from MediaPipe's world landmarks under worldTouchCm centimetres (orientation-proof; 0 disables). Release: ratio >= relSlow, or relFast when the hand moves faster than fastSpd px/s (two frames running). emaBar = the charged-EMA admit bar. sanityAspect = palm aspect above which the hand is a hallucination.",
+    "contrast": 0.18, "backFloor": 1.30,
+    "profileAspect": 2.0, "profileT": 0.95,
+    "curledT": 0.58, "curledAspect": 2.7,
+    "gapFrontal": 0.32, "gapRotated": 0.38,
+    "worldTouchCm": 2.5,
+    "relSlow": 0.55, "relFast": 0.70, "fastSpd": 800,
+    "emaBar": 0.55, "sanityAspect": 6
+  },
+
+  "tap": { "_": "a tap = pinch released within ms, travelling under px", "ms": 300, "px": 26 },
+
+  "fling": { "_": "a throw = peak pinch speed over peak px/s with follow-through >= follow of peak at release (fitted: deliberate fling 1526, casual release <= 128, attempts 447-579 @ 1920x1044)", "peak": 1300, "follow": 0.4 },
+
+  "claw": { "_": "force pull: the open-flash -> claw window, and how long the lit target strains before the snap unlocks", "openWindowMs": 1500, "strainMs": 800 },
+
+  "clap": { "_": "THE STRIKE READ: two upright (handUp > up) open hands closing at >= closing px/s, then both vanish", "closing": 500, "up": 0.85 },
+
+  "light": {
+    "_": "THE LIGHT GOVERNOR. floor = raw hand-zone luma below which FAST is too dark to lift (-> LIGHT after darkMs); back = return to FAST when est. FAST luma > floor*back for brightMs; target/gainMax = the software lift; toneMax = highest ISP tone rung allowed (clinic verdict: 1).",
+    "floor": 0.12, "back": 1.5, "target": 0.42, "gainMax": 3.5, "toneMax": 1,
+    "darkMs": 3000, "brightMs": 5000
+  },
+
+  "tape": { "_": "THE TAPE: seconds of per-frame anatomy kept for `cmd dump`; raw = also keep the 21 raw landmarks + world gap per hand (what tools/replay.py replays)", "seconds": 180, "raw": true }
+}

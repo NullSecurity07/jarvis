@@ -1,5 +1,5 @@
 #!/bin/bash
-# barehands: move things on your screen with your bare hands.
+# jarvis: move things on your screen with your bare hands.
 # Copyright (C) 2026 Jared Rhodenizer
 #
 # This program is free software: you can redistribute it and/or modify
@@ -22,9 +22,9 @@
 # truth instead of memory. Reaches nothing but localhost; changes nothing.
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PORT=$(python3 -c "import json;print(json.load(open('$DIR/barehands.json')).get('port',8794))" 2>/dev/null || echo 8794)
+PORT=$(python3 -c "import json;print(json.load(open('$DIR/jarvis.json')).get('port',8794))" 2>/dev/null || echo 8794)
 STATE=$(curl -sS --max-time 3 "http://127.0.0.1:$PORT/state" 2>/dev/null) || {
-    echo "The board is dark — the barehands server isn't running."; exit 1; }
+    echo "The board is dark — the jarvis server isn't running."; exit 1; }
 export STATE
 python3 <<'PY'
 import json, os

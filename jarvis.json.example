@@ -1,0 +1,10 @@
+{
+  "name": "JARVIS",
+  "port": 8794,
+  "res": "1280x720",
+  "fps": "auto",
+  "orbs": [
+    { "title": "Notes", "path": "sample-notes", "kind": "notes" },
+    { "title": "Props", "path": "media",        "kind": "media" }
+  ]
+}

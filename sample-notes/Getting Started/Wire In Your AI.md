@@ -1,6 +1,6 @@
 # Wire In Your AI
 
-barehands has no AI inside it; it's a **body** waiting for a brain. Any program that can write a tiny file or POST to localhost can drive it. The full recipe lives in the repo's `README.md` and the `barehands.md` setup wizard; this is the short version.
+jarvis has no AI inside it; it's a **body** waiting for a brain. Any program that can write a tiny file or POST to localhost can drive it. The full recipe lives in the repo's `README.md` and the `jarvis.md` setup wizard; this is the short version.
 
 ## The ring is a face (state files)
 
@@ -26,4 +26,4 @@ And `bin/board-state.sh` is the reverse: it prints what's actually on the board,
 
 ## Claude Code users
 
-The `barehands.md` wizard pastes hooks into your Claude Code settings so the ring reflects your real session (thinking while it works, idle when it's done) and teaches your assistant the board commands in your CLAUDE.md. Run it and you're live in minutes.
+Two hooks in your Claude Code settings (see README → Wire in your AI) make the ring reflect your real session (thinking while it works, idle when it's done) and teaches your assistant the board commands in your CLAUDE.md. Run it and you're live in minutes.

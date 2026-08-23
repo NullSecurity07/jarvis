@@ -1,6 +1,6 @@
 # Streaming and Recording (advanced)
 
-For everyday use you only need the tracker page: full screen, camera on, done. But barehands was born on camera, and it composites beautifully.
+For everyday use you only need the tracker page: full screen, camera on, done. But jarvis was born on camera, and it composites beautifully.
 
 ## The two-page split
 

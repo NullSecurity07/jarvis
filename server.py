@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# barehands: move things on your screen with your bare hands.
-# Copyright (C) 2026 Jared Rhodenizer
+# jarvis: move things on your screen with your bare hands.
+# Copyright (C) 2026 Jared Rhodenizer (original work, released as AGPL-3.0)
+# Copyright (C) 2026 nullsec (the jarvis fork)
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
@@ -16,7 +17,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""barehands server — serves the hand-tracked air-board on localhost.
+"""jarvis server — serves the hand-tracked air-board on localhost.
 
 localhost = a secure context, which is what lets the browser open your
 camera for the tracker page. Nothing here ever leaves your machine.
@@ -26,17 +27,28 @@ Endpoints:
   POST /state                  tracker's ~45Hz scene heartbeat; the response
                                carries queued commands (the command channel)
   GET  /state                  the render page mirrors the scene from here
-  POST /cmd                    board commands (your AI -> the board)
-  GET  /config                 the barehands.json config (name + orbs)
+  POST /cmd[?wait=ms]          board commands (your AI -> the board). Returns
+                               {"id", "landed", "board"}; with wait=ms it
+                               blocks until the tracker ACKS the command or
+                               the wait runs out.
+  GET  /config                 the jarvis.json config (name, orbs, res, fps)
+  GET  /tuning                 tuning.json — every gesture/camera number the
+                               stage reads at boot (hand-fitted, editable)
+  GET  /board                  the persisted board (state/board.json): what
+                               was on the glass at the last heartbeat; the
+                               stage restores it after a reload
   GET  /tree?orb=N             a notes orb's folder tree — read-only, JAILED
   GET  /note?f=N/<rel>         one note's text — read-only, JAILED
   GET  /props                  the media airlock as a browsable tree
   GET  /orb                    your assistant's live state (the ring reads it)
   GET  /cam                    live V4L2 camera controls (Linux; the light
   POST /cam                    governor + camera clinic set them here)
+  POST /dump                   the stage's tape (state/tape.json) and its
+                               black box (state/errors.log)
 
-Config lives in barehands.json next to this file:
-  { "name": "Assistant", "port": 8794,
+Config lives in jarvis.json next to this file (re-read whenever it changes;
+no restart needed):
+  { "name": "JARVIS", "port": 8794, "res": "1280x720", "fps": "auto",
     "orbs": [ { "title": "Notes", "path": "sample-notes", "kind": "notes" },
               { "title": "Props", "path": "media",        "kind": "media" } ] }
 
@@ -50,22 +62,35 @@ Your AI drives the ring by writing tiny files into ./state/ :
   state/wave.json  {"samples": [0..1 x 64], "ts": <unix time>}
 Missing files are fine — the ring just idles.
 """
+import collections
 import json
 import re
 import shutil
 import subprocess
+import threading
 import time
 import urllib.parse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+CONFIG_FILE = HERE / "jarvis.json"
+TUNING_FILE = HERE / "tuning.json"
+BOARD_FILE = HERE / "state" / "board.json"
 
 
-def load_config():
-    cfg = {"name": "Assistant", "port": 8794, "orbs": []}
+# ---- THE CONFIG (hot): re-read whenever jarvis.json's mtime changes, so a
+# new orb or a new name lands on the next request — no restart. The port
+# is read once at start (a socket can't move under a running server).
+_CFG_LOCK = threading.Lock()
+_CFG = {"cfg": None, "mtime": None}
+
+
+def _read_config():
+    cfg = {"name": "JARVIS", "port": 8794, "orbs": [],
+           "res": "1280x720", "fps": "auto"}
     try:
-        cfg.update(json.loads((HERE / "barehands.json").read_text()))
+        cfg.update(json.loads(CONFIG_FILE.read_text()))
     except Exception:
         pass
     if not cfg.get("orbs"):
@@ -78,13 +103,23 @@ def load_config():
     return cfg
 
 
-CONFIG = load_config()
+def config():
+    """The live config: reloaded when the file changed on disk."""
+    try:
+        mt = CONFIG_FILE.stat().st_mtime
+    except OSError:
+        mt = None
+    with _CFG_LOCK:
+        if _CFG["cfg"] is None or mt != _CFG["mtime"]:
+            _CFG["cfg"] = _read_config()
+            _CFG["mtime"] = mt
+        return _CFG["cfg"]
 
 
 def orb_root(i):
     """Resolve a notes orb's jail root, or None."""
     try:
-        orb = CONFIG["orbs"][int(i)]
+        orb = config()["orbs"][int(i)]
         assert orb.get("kind") == "notes"
         p = Path(orb["path"])
         if not p.is_absolute():
@@ -94,11 +129,59 @@ def orb_root(i):
         return None
 
 
+def cam_dev():
+    return str(config().get("camera_dev", "/dev/video0"))
+
+
+# ---- THE SCENE + THE COMMAND CHANNEL.
+# The tracker POSTs its scene ~45x/s; the render page and your AI's eyes
+# GET it. Commands queue here with an id; the tracker drains them in its
+# heartbeat response and reports the highest id it applied (`ack`) in its
+# next heartbeat — that is what lets POST /cmd?wait= tell you "landed"
+# instead of "queued" (the board can be hidden/throttled, in which case a
+# command sits here unseen; you deserve to know).
+_LOCK = threading.Lock()
 _STATE = b"{}"          # latest scene state: tracker POSTs, render GETs
-_CMDS = []              # queued board commands (your AI -> tracker)
+_STATE_T = 0.0          # when the last heartbeat arrived (monotonic)
+_CMDS = collections.deque()   # queued board commands, each carries an id
+_CMD_SEQ = 0
+_ACK = 0                # highest command id the tracker reports applied
+_ACK_EV = threading.Condition(_LOCK)
 _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
             "yank", "hover", "scroll_note", "widget", "explode", "assemble",
             "present", "clinic", "light", "reload", "dump")
+_MAX_QUEUE = 256        # a hidden board must not grow a silent backlog forever
+
+# ---- THE BOARD FILE: what is on the glass, persisted so a reload (or a
+# server restart) brings it back. Written from the heartbeat, at most
+# once a second, and only when the scene actually changed.
+_BOARD = {"sig": None, "t": 0.0}
+_BOARD_TYPES = ("card", "img", "model", "panel")
+_BOARD_KEYS = ("type", "title", "body", "src", "mm", "lf", "ex", "rx", "ry",
+               "rz", "file", "x", "y", "scale")
+
+
+def _persist_board(body):
+    now = time.monotonic()
+    if now - _BOARD["t"] < 1.0:
+        return
+    try:
+        items = json.loads(body).get("items") or []
+    except Exception:
+        return
+    keep = [{k: i.get(k) for k in _BOARD_KEYS if i.get(k) is not None}
+            for i in items if i.get("type") in _BOARD_TYPES]
+    sig = json.dumps(keep, sort_keys=True)
+    if sig == _BOARD["sig"]:
+        return
+    _BOARD["sig"] = sig
+    _BOARD["t"] = now
+    try:
+        BOARD_FILE.parent.mkdir(exist_ok=True)
+        BOARD_FILE.write_text(json.dumps({"at": time.time(), "items": keep}))
+    except Exception:
+        pass
+
 
 # ---- THE CAMERA BRIDGE (/cam). Chrome can't reach every V4L2 control
 # (exposure_dynamic_framerate, the ROI metering pair), and those are the
@@ -107,7 +190,6 @@ _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
 # allows a second fd for controls). Allowlisted names + ranges only,
 # localhost only like everything else; no v4l2-ctl -> 501 and the page
 # simply runs telemetry-only.
-_CAM_DEV = str(CONFIG.get("camera_dev", "/dev/video0"))
 _CAM_CTRLS = {                      # name: (lo, hi) or None for the rect
     "auto_exposure": (1, 3), "exposure_time_absolute": (4, 1250),
     "exposure_dynamic_framerate": (0, 1), "backlight_compensation": (0, 2),
@@ -123,7 +205,7 @@ def cam_read():
     """Readback of every allowlisted control: {name: value-string}."""
     if not shutil.which("v4l2-ctl"):
         return None
-    r = subprocess.run(["v4l2-ctl", "-d", _CAM_DEV, "-C",
+    r = subprocess.run(["v4l2-ctl", "-d", cam_dev(), "-C",
                         ",".join(_CAM_CTRLS)], capture_output=True,
                        text=True, timeout=3)
     out = {}
@@ -154,11 +236,19 @@ def cam_set(pairs):
             except Exception:
                 errs[k] = "out of range"
                 continue
-        r = subprocess.run(["v4l2-ctl", "-d", _CAM_DEV, "-c", f"{k}={v}"],
+        r = subprocess.run(["v4l2-ctl", "-d", cam_dev(), "-c", f"{k}={v}"],
                            capture_output=True, text=True, timeout=3)
         if r.returncode or r.stderr.strip():
             errs[k] = (r.stderr.strip() or f"rc {r.returncode}")[:120]
     return errs
+
+
+def board_status():
+    """live | stale | down — how fresh the tracker's heartbeat is."""
+    age = time.monotonic() - _STATE_T if _STATE_T else None
+    if age is None or age > 10:
+        return "down", age
+    return ("live" if age < 1.5 else "stale"), age
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -175,6 +265,15 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def handle(self):
+        # the tracker drops heartbeat connections mid-reply all the time
+        # (a reload, a throttled tab): that is not an error worth a
+        # traceback in the launcher log
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass
+
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
         self.send_response(code)
@@ -184,23 +283,40 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _raw(self, body, code=200, ctype="application/json"):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
-        global _STATE
+        global _STATE, _STATE_T, _CMD_SEQ, _ACK
+        url = urllib.parse.urlparse(self.path)
+        path, q = url.path, urllib.parse.parse_qs(url.query)
         n = int(self.headers.get("Content-Length", 0) or 0)
-        cap = 8_000_000 if self.path == "/dump" else 262144
+        cap = 64_000_000 if path == "/dump" else 262144
         body = self.rfile.read(n) if 0 < n < cap else b"{}"
-        if self.path == "/state":
-            # the tracker's heartbeat doubles as the command channel
-            _STATE = body
-            out = json.dumps(_CMDS[:8]).encode()
-            del _CMDS[:8]
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(out)))
-            self.end_headers()
-            self.wfile.write(out)
+        if path == "/state":
+            # the tracker's heartbeat doubles as the command channel:
+            # it carries `ack` (highest command id applied) in, and
+            # takes the next batch of commands out — under one lock, so
+            # a command can never be dropped between "read" and "delete"
+            batch = []
+            with _LOCK:
+                _STATE = body
+                _STATE_T = time.monotonic()
+                m = re.search(rb'"ack":\s*(\d+)', body[:4096])
+                if m:
+                    _ACK = max(_ACK, int(m.group(1)))
+                    _ACK_EV.notify_all()
+                while _CMDS and len(batch) < 8:
+                    batch.append(_CMDS.popleft())
+            self._raw(json.dumps(batch).encode())
+            _persist_board(body)
             return
-        if self.path == "/dump":
+        if path == "/dump":
             # the stage's tape (cmd dump) lands in state/tape.json for
             # whoever is tuning — your AI reads it, fits, and edits
             try:
@@ -215,7 +331,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_response(500)
             self.end_headers()
             return
-        if self.path == "/cam":
+        if path == "/cam":
             # live camera controls from the stage (the light governor,
             # the camera clinic) or from you: {"set": {name: value}}
             try:
@@ -235,7 +351,7 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:
                 self._json({"err": str(e)[:200]}, 500)
             return
-        if self.path == "/cmd":
+        if path == "/cmd":
             try:
                 cmd = json.loads(body)
                 assert cmd.get("a") in _ALLOWED
@@ -259,28 +375,70 @@ class Handler(SimpleHTTPRequestHandler):
                             raise ValueError("not in the media airlock")
                         target = hits[0]
                     cmd["src"] = "/media/" + target.relative_to(media).as_posix()
-                _CMDS.append(cmd)
-                self.send_response(204)
             except Exception:
-                self.send_response(400)
-            self.end_headers()
+                self._json({"err": "rejected: unknown action or file "
+                                   "outside the media airlock"}, 400)
+                return
+            wait_ms = 0
+            try:
+                wait_ms = max(0, min(30000, int((q.get("wait") or ["0"])[0])))
+            except ValueError:
+                pass
+            with _LOCK:
+                _CMD_SEQ += 1
+                cid = _CMD_SEQ
+                cmd["id"] = cid
+                _CMDS.append(cmd)
+                while len(_CMDS) > _MAX_QUEUE:
+                    _CMDS.popleft()
+                landed = False
+                if wait_ms:
+                    deadline = time.monotonic() + wait_ms / 1000
+                    while _ACK < cid:
+                        left = deadline - time.monotonic()
+                        if left <= 0:
+                            break
+                        _ACK_EV.wait(left)
+                    landed = _ACK >= cid
+            status, age = board_status()
+            self._json({"id": cid, "landed": landed, "board": status,
+                        "age": None if age is None else round(age, 1)})
             return
         self.send_response(404)
         self.end_headers()
 
     def do_GET(self):
-        if self.path == "/config":
-            # the page builds its ring name + orb bloom from this
-            self._json({"name": CONFIG.get("name", "Assistant"),
+        url = urllib.parse.urlparse(self.path)
+        path, q = url.path, urllib.parse.parse_qs(url.query)
+        cfg = config()
+        if path == "/config":
+            # the page builds its ring name + orb bloom from this, and
+            # takes its camera defaults (res / fps) unless the URL says
+            self._json({"name": cfg.get("name", "JARVIS"),
+                        "res": cfg.get("res"), "fps": cfg.get("fps"),
                         "orbs": [{"title": o.get("title", "?"),
                                   "kind": o.get("kind", "notes")}
-                                 for o in CONFIG["orbs"]]})
+                                 for o in cfg["orbs"]]})
             return
-        if self.path.startswith("/tree"):
+        if path == "/tuning":
+            # every hand-fitted number the stage reads at boot. Missing
+            # file = {} = the stage's built-in defaults.
+            try:
+                self._raw(TUNING_FILE.read_bytes())
+            except OSError:
+                self._json({})
+            except Exception:
+                self._json({"err": "tuning.json unreadable"}, 500)
+            return
+        if path == "/board":
+            try:
+                self._raw(BOARD_FILE.read_bytes())
+            except OSError:
+                self._json({"items": []})
+            return
+        if path == "/tree":
             # a notes orb's folder tree. Jailed to that orb's configured
             # folder, .md only, CLAUDE.md (AI config, not a note) excluded.
-            q = urllib.parse.parse_qs(
-                urllib.parse.urlparse(self.path).query)
             idx = (q.get("orb") or ["0"])[0]
             root = orb_root(idx)
             if root is None or not root.is_dir():
@@ -305,12 +463,12 @@ class Handler(SimpleHTTPRequestHandler):
                 return out
             try:
                 tree = walk(root)
-                tree["name"] = CONFIG["orbs"][int(idx)].get("title", tree["name"])
+                tree["name"] = cfg["orbs"][int(idx)].get("title", tree["name"])
                 self._json(tree)
             except Exception:
                 self._json({"name": "?", "notes": [], "dirs": []}, 500)
             return
-        if self.path == "/props":
+        if path == "/props":
             # the media airlock as a browsable tree — live filesystem
             # read: drop a file in media/, reopen the orb, it's there
             EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".webm",
@@ -336,7 +494,7 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception:
                 self._json({"name": "Props", "items": [], "dirs": []}, 500)
             return
-        if self.path == "/orb":
+        if path == "/orb":
             # the ring's heartbeat: your assistant's live state, read from
             # tiny files in ./state/. Every read fails soft — no files,
             # no assistant, no problem: the ring just breathes.
@@ -363,30 +521,26 @@ class Handler(SimpleHTTPRequestHandler):
                     pass
             self._json(out)
             return
-        if self.path == "/cam":
+        if path == "/cam":
             # the camera's live controls (the governor's readback channel)
             try:
                 c = cam_read()
                 if c is None:
                     self._json({"err": "no v4l2"}, 501)
                 else:
-                    self._json({"dev": _CAM_DEV, "cam": c})
+                    self._json({"dev": cam_dev(), "cam": c})
             except Exception as e:
                 self._json({"err": str(e)[:200]}, 500)
             return
-        if self.path == "/state":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(_STATE)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(_STATE)
+        if path == "/state":
+            with _LOCK:
+                body = _STATE
+            self._raw(body)
             return
-        if not self.path.startswith("/note?"):
+        if path != "/note":
             return super().do_GET()
         # one note's text: f=<orb>/<relpath>, resolved against that orb's
         # jail. Inside the root, .md only, must exist — anything else 404s.
-        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         rel = (q.get("f") or [""])[0]
         idx, _, rel = rel.partition("/")
         root = orb_root(idx)
@@ -401,17 +555,13 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             return
         body = target.read_text(encoding="utf-8", errors="replace").encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._raw(body, ctype="text/plain; charset=utf-8")
 
 
 if __name__ == "__main__":
     (HERE / "state").mkdir(exist_ok=True)   # the ring's runtime files land here
-    port = int(CONFIG.get("port", 8794))
-    print(f"barehands up: http://127.0.0.1:{port}/stage.html", flush=True)
+    port = int(config().get("port", 8794))
+    print(f"jarvis up: http://127.0.0.1:{port}/stage.html", flush=True)
     print("  tracker (camera): open that URL in Chrome", flush=True)
     print("  render (overlay): same URL + ?role=render", flush=True)
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()

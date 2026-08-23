@@ -1,12 +1,11 @@
 # Troubleshooting & Gesture Tuning
 
-This file is written for humans AND for AI assistants. If you're an AI helping someone debug barehands: read this whole file, then follow THE TUNING CLINIC's method exactly: measure first, edit second. Never adjust a threshold from theory; every number in stage.html was fitted from real-hand samples, and yours should be too.
+This file is written for humans AND for AI assistants. If you're an AI helping someone debug jarvis: read this whole file, then follow THE TUNING CLINIC's method exactly: measure first, edit second. Never adjust a threshold from theory; every number in `tuning.json` was fitted from real-hand samples, and yours should be too.
 
 ## Quick fixes first
 
-- **Everything moves but nothing OPENS**: you opened `stage.html` by double-clicking it, so there is no server behind the page. The camera and every gesture still work (that math is all client-side), but tapping to open asks the server for the file and there is nothing to ask. Start it from the barehands folder with `python3 server.py` (Windows: `python server.py`) and open **http://127.0.0.1:8794/stage.html** in Chrome. The page now catches this and says so, but older copies will not.
-- **Server won't start / port in use**: something else holds the port. Change `"port"` in `barehands.json` (any free port works), restart, and use the new port in your URLs.
-- **Updating says local changes to `state/state` would be overwritten**: a one-time leftover from early versions that tracked the ring's live state file in git. Run `git checkout -- state/state`, then update again. Newer versions leave that file untracked, so it never comes back.
+- **Everything moves but nothing OPENS**: you opened `stage.html` by double-clicking it, so there is no server behind the page. The camera and every gesture still work (that math is all client-side), but tapping to open asks the server for the file and there is nothing to ask. Start it from the jarvis folder with `python3 server.py` (Windows: `python server.py`) and open **http://127.0.0.1:8794/stage.html** in Chrome. The page now catches this and says so, but older copies will not.
+- **Server won't start / port in use**: something else holds the port. Change `"port"` in `jarvis.json` (any free port works), restart, and use the new port in your URLs.
 - **Page stuck on "loading hand tracker…"**: the first run downloads the hand-tracking model and 3D library from CDNs; it needs internet once, then caches. Also: use **Chrome**; its hand tracking is the proven path.
 - **Camera won't open**: another app may own it. Press **C** to cycle cameras; the boot is resilient and will try every camera the OS offers. `?cam=<name>` in the URL pins a specific one.
 - **Hands move the wrong direction in the OBS overlay**: your OBS camera source is mirrored. Add `&mirror=1` to the render URL.
@@ -20,7 +19,7 @@ This file is written for humans AND for AI assistants. If you're an AI helping s
 
 ## The instruments
 
-barehands ships the same two instruments its gestures were originally tuned with:
+jarvis ships the same two instruments its gestures were originally tuned with:
 
 - **D: the debug overlay.** Press `D` on the tracker page. Live per-frame telemetry: fps, hand count, the pinch ratio and its state, claw/palm flags, and a `fpDbg` line with the raw gate metrics.
 - **P: the omni-sampler.** Press `P`, then hold ONE pose steadily in frame for 4 seconds. It records every gate metric across the window and toasts two summary lines (each value as `min–median–max`):
@@ -42,6 +41,7 @@ All of these are ratios or angles measured against the hand's own geometry; that
 | `a` | palm aspect: span ÷ knuckle-row width | ~1.5–5.5 = real hand poses. **> 6 = the tracker is hallucinating** (the sanity bound rejects it) |
 | `f8 f12 f16 f20` | per-finger ARCH: tip-from-wrist ÷ knuckle-from-wrist | > ~1.4 = finger reaching outward, ~1.0 or less = folded in |
 | `t` | thumb-tip distance from the ring-finger knuckle ÷ span | the profile-view pinch judge: high = thumb riding far off the knuckle row |
+| `w` | thumb-tip↔index-tip distance in MediaPipe's metric 3D hand, in cm | THE WORLD LANE: the same number at any palm angle; touching ≈ 1–2 cm, a near-pinch 3+. `pinch.worldTouchCm` is its admit bar (0 disables) |
 
 ## The light governor (frame rate vs light) — Linux
 
@@ -62,6 +62,10 @@ The camera, not the code, sets the frame rate: a webcam's auto-exposure with *dy
 - **The strike read.** A real clap happens *between* frames and pressed palms are no hand to the tracker, so the old contact read rarely saw it. Now: two open, upright hands that were apart, closing fast (≥500 px/s), then both vanish = clap. Every detected clap flashes the screen edge teal and toasts `clap (strike|contact)`; `GET /state → perf.clapN/clapT/clapHow` counts them.
 - **The tape.** `POST /cmd {"a":"dump"}` writes the last ~3 minutes of per-frame hand anatomy (pinch ratio, curls, hooks, claw flag, held-pose clock, arm/aim/lit state, clap wrist distance + uprightness) to `state/tape.json`. Read it before moving any number.
 
+## The tape replay (tools/replay.py)
+
+`bin/board.sh '{"a":"dump"}'` writes the last 3 minutes of hand anatomy — with the 21 raw landmarks per hand (`tuning.json` → `tape.raw`) — to `state/tape.json`. `tools/replay.py` runs that tape back through the pinch gate's math under the tuning it was recorded with, lists every pinch (recorded vs replayed), says which lane admitted each one (2D gap or the world lane), and takes `--set key=value` what-ifs and `--expect pinches=N` assertions. It is a model of the gate (probation and the claw/clap engines are not replayed), so treat a disagreement as a lead and confirm on the glass.
+
 ## The hands: identity, grace, smoothing
 
 MediaPipe hands the tracker an array each frame; the tracker keeps each hand's identity across frames by wrist distance (handedness only breaks ties), never reuses an id, keeps a vanished hand as a ghost for 200 ms (its item stays parked; a hand that blinks out fires no tap and no fling), and passes every landmark through a One-Euro filter (steady at rest, sharp in motion). `?smooth=0` bypasses the filter for A/B. None of the gesture thresholds moved — they just read steadier numbers.
@@ -74,21 +78,20 @@ When a gesture misfires or won't fire for a particular person, do NOT guess at t
 2. **Sample the CORRECT pose.** Press P; the person holds the intended pose (a proper OK-sign pinch, a full claw, etc.) for the 4 seconds. Record both output lines.
 3. **Sample the IMPOSTOR.** Press P again; the person holds the pose that's being confused with it (the relaxed hand that false-triggers, the fist that reads as a pinch, whatever the failure is). Record both lines.
 4. **Find the canyon.** Compare the two samples metric by metric. You're looking for a metric where the correct pose's `min–max` range and the impostor's range DON'T overlap; the gap between them is the canyon. That metric is your discriminator. (If several metrics separate, prefer curls and arch-ratios over raw gaps; they're the most pose-stable.)
-5. **Cut mid-canyon.** Find that metric's threshold in `stage.html` (search the gesture's name; the pinch gate, the claw gate, and the clap gate are each one commented block) and move the cut to the middle of the canyon, not to the edge of either range. The comments at each threshold record the ranges it was originally fitted from; update the comment with the new evidence when you change a number.
+5. **Cut mid-canyon.** Find that metric's number in `tuning.json` (every gate reads it at boot; `bin/board.sh '{"a":"reload"}'` makes an edit live) and move the cut to the middle of the canyon, not to the edge of either range. The `_` strings in the file record what each number is and the ranges it was fitted from; update them with the new evidence when you change a number. Before you move anything, replay the tape: `bin/board.sh '{"a":"dump"}'` then `tools/replay.py --set pinch.worldTouchCm=3` shows what the new number would have done to the hand you just recorded.
 6. **Retest BOTH poses.** The correct pose must fire; the impostor must not. If no single metric separates the two samples cleanly, the pose pair is genuinely ambiguous: change the pose being asked of the user, don't stack fragile thresholds.
 
 ### Which numbers live where
 
-- **The pinch:** search `THE CONTRAST LAW`. The OK-sign's signature: back-three-finger arch minus index arch (`backMean − f8v > 0.18`), the fist wall (`backMean > 1.30`), the profile lane (`aspect < 2.0 && tRel > 0.95`), and the gap ceilings (0.32 frontal / 0.38 rotated palm).
-- **The claw:** search `v6.1` / the claw gate. Mouth floor (`ratio >` ~0.80 to enter, looser to hold), per-finger curl ceilings, pinky-out (`c20`), aspect rail.
-- **The clap:** search `THE PRAYER LAW`. Wrist + knuckle proximity (fractions of window width), vertical-fingers floor (`handUp > 0.85`), the was-apart memory.
-- **Hallucinated hands:** search `THE SANITY BOUND` (`aspect > 6`).
-- **Throw/tap feel:** search `pk > 1300` (fling speed), `tMs < 300` (tap timing). These are the only screen-pixel-based gates, so someone at an unusual distance or window size may want them nudged; everything above is distance-proof ratios.
+All of them in `tuning.json` (keys named below); the matching code blocks in `stage.html` carry the fitting history in their comments.
+
+- **The pinch:** `pinch.*` (search `THE CONTRAST LAW` in the stage for the history). The OK-sign's signature: back-three-finger arch minus index arch (`backMean − f8v > 0.18`), the fist wall (`backMean > 1.30`), the profile lane (`aspect < 2.0 && tRel > 0.95`), and the gap ceilings (0.32 frontal / 0.38 rotated palm).
+- **The claw:** `claw.openWindowMs` / `claw.strainMs` for timing; the pose gates: search `v6.1` / the claw gate in the stage. Mouth floor (`ratio >` ~0.80 to enter, looser to hold), per-finger curl ceilings, pinky-out (`c20`), aspect rail.
+- **The clap:** `clap.closing` / `clap.up`; search `THE PRAYER LAW` for the rest. Wrist + knuckle proximity (fractions of window width), vertical-fingers floor (`handUp > 0.85`), the was-apart memory.
+- **Hallucinated hands:** `pinch.sanityAspect` (THE SANITY BOUND).
+- **Throw/tap feel:** `fling.peak` / `fling.follow`, `tap.ms` / `tap.px`. These are the only screen-pixel-based gates, so someone at an unusual distance or window size may want them nudged; everything above is distance-proof ratios.
 
 ### The philosophy
 
 Every gesture gate here answers one question: "does this SHAPE, measured against itself, match the intended pose?" Shapes transfer across people, cameras, and distances. When you tune for a new hand, you're not fixing the system; you're doing exactly what its author did: fitting the cut to the human in front of the camera.
 
-## Updating
-
-Run `./update.sh` (`update.bat` on Windows) in this folder, or double-click the `Update` icon if setup left one. It shows what changed before applying it and can never touch your `barehands.json`. If an older updater said "couldn't fast-forward" or mentioned local changes, run `./update.sh` once and it clears: it moves your config out of git's sight and everything flows after.

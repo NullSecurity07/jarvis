@@ -1,8 +1,8 @@
-# Welcome to barehands
+# Welcome to jarvis
 
 If you're reading this on a floating pane of glass that you opened with your fingers: congratulations, it works.
 
-This note lives in the `sample-notes/` folder of the repo. Every note you see on the board is just a markdown file in a folder on your computer. Point barehands at YOUR folder of notes (an Obsidian vault is just a folder of markdown) and your own notes bloom here instead.
+This note lives in the `sample-notes/` folder of the repo. Every note you see on the board is just a markdown file in a folder on your computer. Point jarvis at YOUR folder of notes (an Obsidian vault is just a folder of markdown) and your own notes bloom here instead.
 
 **Three things to try right now:**
 
@@ -10,4 +10,4 @@ This note lives in the `sample-notes/` folder of the repo. Every note you see on
 2. Tap the ring, then tap the **Props** orb; drop any image into `media/misc/` and it's there.
 3. Read **The Gestures** note in this folder. Then clear the board with a clap.
 
-When you're ready to make this yours, open the repo in Claude Code and say: *"read barehands.md and set me up."*
+When you're ready to make this yours, point an orb at your own notes folder in `jarvis.json`.

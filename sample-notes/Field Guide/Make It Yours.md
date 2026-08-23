@@ -2,7 +2,7 @@
 
 Everything here is a starting point. The whole system is one HTML page, one small Python server, and one config file. No build step, no framework, no dependencies to install.
 
-## The config (`barehands.json`)
+## The config (`jarvis.json`)
 
 - `name`: what the ring says. Your assistant's name, in lights.
 - `port`: where the server listens (default 8794).

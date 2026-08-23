@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <!--
-barehands: move things on your screen with your bare hands.
-Copyright (C) 2026 Jared Rhodenizer
+jarvis: move things on your screen with your bare hands.
+Copyright (C) 2026 Jared Rhodenizer (original work, AGPL-3.0)
+Copyright (C) 2026 nullsec (the jarvis fork)
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
@@ -21,7 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 <html>
 <head>
 <meta charset="utf-8">
-<title>barehands</title>
+<title>jarvis</title>
 <style>
   html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden;
                background:#000; font-family:-apple-system,"SF Pro Display",sans-serif; }
@@ -265,18 +266,18 @@ if (location.protocol === "file:") {
     '<body style="margin:0;background:#04191c;color:#dff3ee;font:15px/1.65 ui-monospace,Menlo,monospace;' +
     'display:flex;align-items:center;justify-content:center;height:100vh;padding:24px;text-align:left">' +
     '<div style="max-width:620px">' +
-    '<div style="font-size:22px;letter-spacing:.18em;color:#6fe3c9;margin-bottom:18px">BAREHANDS NEEDS ITS SERVER</div>' +
+    '<div style="font-size:22px;letter-spacing:.18em;color:#6fe3c9;margin-bottom:18px">JARVIS NEEDS ITS SERVER</div>' +
     '<p>You opened this file directly, so there is no server behind it. The camera and the gestures will still work, ' +
     'but nothing will ever <b>open</b>: tapping a card asks the server for the file, and there is nothing to ask.</p>' +
-    '<p style="margin-top:16px">Start it from the barehands folder:</p>' +
+    '<p style="margin-top:16px">Start it from the jarvis folder:</p>' +
     '<pre style="background:#052227;border:1px solid #14484f;padding:12px 14px;border-radius:8px;color:#9ff0dd">' +
     'python3 server.py      <span style="color:#6b9c96"># Windows: python server.py</span></pre>' +
     '<p style="margin-top:14px">Then open this in Chrome:</p>' +
     '<pre style="background:#052227;border:1px solid #14484f;padding:12px 14px;border-radius:8px;color:#9ff0dd">' +
     'http://127.0.0.1:8794/stage.html</pre>' +
-    '<p style="margin-top:18px;color:#7fb3ab">If you changed "port" in barehands.json, use that port instead.</p>' +
+    '<p style="margin-top:18px;color:#7fb3ab">If you changed "port" in jarvis.json, use that port instead.</p>' +
     '</div></body>';
-  throw new Error("barehands: opened over file://, server required");
+  throw new Error("jarvis: opened over file://, server required");
 }
 // First-run watchdog: the hand tracker and the 3D library arrive from CDNs,
 // so with no internet the boot screen sits forever with no error. Say so.
@@ -288,8 +289,8 @@ setTimeout(function () {
 </script>
 <video id="cam" autoplay playsinline muted></video>
 <div id="behind"></div>
-<div id="boot">BAREHANDS<br><span style="color:#a8d8cf;font-size:12px;letter-spacing:0.22em">by jaredrhod</span><br><span style="color:#a8d8cf;font-size:13px">loading hand tracker… allow the camera when asked</span></div>
-<div id="hint">tap the RING = orbs · tap an orb = its tree · TAP a card = open · pinch-drag = move · hold still ~1s = 3D rotate · two hands = scale · TAP an open item = close · CLAP (palms together, fingers up) = ring center-stage · CLAW: flash open, claw, aim, hold the strain 2s, SNAP = force pull · empty pinch dragged sideways = explode scrub · R respawn / C camera / D debug</div>
+<div id="boot">JARVIS<br><span style="color:#a8d8cf;font-size:13px">loading hand tracker… allow the camera when asked</span></div>
+<div id="hint">tap the RING = orbs · tap an orb = its tree · TAP a card = open · pinch-drag = move · hold still ~1s = 3D rotate · two hands = scale · TAP an open item = close · CLAP (palms together, fingers up) = ring center-stage · CLAW: flash open, then freeze thumb+pinky and half-hook the other three (C facing the camera), aim, let it strain ~1s, SNAP = force pull · empty pinch dragged sideways = explode scrub · R respawn / C camera / D debug</div>
 <div id="debug"></div>
 <div id="toast"></div>
 <!-- THE LIFT: a gamma curve for the detector's input (shadows up, highlights
@@ -318,6 +319,49 @@ addEventListener("unhandledrejection", e => { try { fetch("/dump", { method: "PO
 import { HandLandmarker, FilesetResolver } from
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
+// ---- THE TUNING FILE. Every hand-fitted number the gates read lives in
+// tuning.json (GET /tuning) and lands here BEFORE any module code below
+// runs (top-level await). The defaults are the shipped values; the file
+// deep-merges over them, so a missing key is never an error and a wrong
+// key is never a crash. Edit the file, `cmd reload`, the new numbers
+// are live. window.TUNE exposes it for the console.
+const TUNE_DEFAULTS = {
+  detector: { detect: 0.65, presence: 0.45, track: 0.45 },
+  hands: { graceMs: 200, gate: 0.35,
+           euro: { minCutoff: 1.5, beta: 8, dCutoff: 1, zMinCutoff: 1.0 },
+           cursorLerp: 0.45 },
+  pinch: { contrast: 0.18, backFloor: 1.30, profileAspect: 2.0, profileT: 0.95,
+           curledT: 0.58, curledAspect: 2.7, gapFrontal: 0.32, gapRotated: 0.38,
+           worldTouchCm: 2.5, relSlow: 0.55, relFast: 0.70, fastSpd: 800,
+           emaBar: 0.55, sanityAspect: 6 },
+  tap: { ms: 300, px: 26 },
+  fling: { peak: 1300, follow: 0.4 },
+  claw: { openWindowMs: 1500, strainMs: 800 },
+  clap: { closing: 500, up: 0.85 },
+  light: { floor: 0.12, back: 1.5, target: 0.42, gainMax: 3.5, toneMax: 1,
+           darkMs: 3000, brightMs: 5000 },
+  tape: { seconds: 180, raw: true },
+};
+function tuneMerge(base, over) {
+  const out = Array.isArray(base) ? base.slice() : { ...base };
+  if (!over || typeof over !== "object") return out;
+  for (const k of Object.keys(over)) {
+    if (k.startsWith("_")) continue;                 // doc strings
+    const b = base ? base[k] : undefined, o = over[k];
+    out[k] = (b && typeof b === "object" && !Array.isArray(b) && o && typeof o === "object")
+      ? tuneMerge(b, o)
+      : (typeof b === "number" && typeof o !== "number") ? b : o;  // a typo never poisons a number
+  }
+  return out;
+}
+const TUNE = await (async () => {
+  try {
+    const r = await fetch("/tuning", { cache: "no-store" });
+    return tuneMerge(TUNE_DEFAULTS, r.ok ? await r.json() : {});
+  } catch (_) { return tuneMerge(TUNE_DEFAULTS, {}); }
+})();
+window.TUNE = TUNE;
+
 // modes: ?mode=mirror (default, self-view) | overlay (transparent — OBS
 // browser sources can't open cameras reliably on macOS, kept for browsers
 // that can) | key (solid key color for window-capture + chroma; ?key=
@@ -337,10 +381,11 @@ const Q = new URLSearchParams(location.search);
 // Everything downstream is aspect-agnostic (fractions + cover-fit):
 // shape the tracker WINDOW to match, 9:16 OBS canvas for the render.
 const PORTRAIT = Q.get("portrait") === "1";
-const RES = (() => {
+const RES_FROM_URL = /^(\d{3,4})x(\d{3,4})$/i.test(Q.get("res") || "");
+let RES = (() => {
   const m = /^(\d{3,4})x(\d{3,4})$/i.exec(Q.get("res") || "");
   return m ? [+m[1], +m[2]] : [1920, 1080];
-})();
+})();   // the config's "res" fills in at boot when the URL is silent
 let MODE = Q.get("mode") || "mirror";
 if (MODE === "greenkey") { MODE = "key"; Q.set("key", "green"); }   // back-compat
 if (MODE === "overlay") {
@@ -366,7 +411,13 @@ let SAMPLER = null;    // the pose sampler (dormant — claw/pinch tuning)
 let CLAPSAMP = null;   // the P clap recorder (v3.9.1)
 let SAMPLED = "";      // its frozen last result (D overlay)
 let landmarker = null, lastVideoTs = -1, frames = 0, fps = 0, lastFpsTs = performance.now();
-const TAPE = [];       // THE TAPE: ~3 min ring of per-frame hand anatomy (cmd dump)
+const TAPE = [];       // THE TAPE: ring of per-frame hand anatomy (cmd dump)
+let TAPE_I = 0;        // ring write index once full
+const TAPE_MAX = Math.max(30, Math.round(30 * TUNE.tape.seconds));
+function tapeRows() {  // oldest first
+  return TAPE.length < TAPE_MAX ? TAPE.slice()
+                                : TAPE.slice(TAPE_I).concat(TAPE.slice(0, TAPE_I));
+}
 // 2026-08-23 perf probes (EMA ms): det = detectForVideo, loop = physics
 // + renders, raf = frame-to-frame gap. Streamed via /state for tuning.
 const PERF = { det: 0, loop: 0, raf: 0, lastNow: 0, pre: 0 };   // pre = detector-input prep
@@ -885,7 +936,7 @@ async function buildModelScene(el, src, mm, lift) {
     // envelope is remembered per file, so the invisible rehearsal
     // below runs ONCE per model per browser — every later load reads
     // the box instantly.
-    const bkey = "barehands-box:" + src;
+    const bkey = "jarvis-box:" + src;
     let cachedBox = null;
     try { cachedBox = JSON.parse(localStorage.getItem(bkey) || "null"); }
     catch (e) {}
@@ -1196,13 +1247,16 @@ function give(c) {
   if (ci != null) c.anim = { k: "give", t: 0, ci: +ci };
 }
 
+let CMD_ACK = 0;   // highest /cmd id applied — travels back in the heartbeat
 function applyCmds(cmds) {
   (cmds || []).forEach(c => {
+    if (c.id) CMD_ACK = Math.max(CMD_ACK, c.id);
     if (c.a === "reload") {               // after an update: fresh code, same window
       location.reload();
     } else if (c.a === "dump") {          // the last ~3 min of hand anatomy → /dump
       fetch("/dump", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ at: Date.now(), fps, rows: TAPE }) }).catch(() => {});
+        body: JSON.stringify({ at: Date.now(), fps, W: innerWidth, H: innerHeight,
+                               tune: TUNE, rows: tapeRows() }) }).catch(() => {});
     } else if (c.a === "clinic") {        // your AI can run the camera clinic
       CLINIC.start();
     } else if (c.a === "light") {         // ...and set the light governor
@@ -1365,7 +1419,7 @@ function ringToggle(ring) {
 let CFG = { name: "Assistant", orbs: [] };
 let TREES = [], PROPSTREE = null;
 async function loadTree() {
-  // barehands.json drives everything: the ring's name and one orb per
+  // jarvis.json drives everything: the ring's name and one orb per
   // configured folder (kind "notes" = a markdown tree, "media" = props)
   try { const r = await fetch("/config"); if (r.ok) CFG = await r.json(); }
   catch (e) {}
@@ -1663,11 +1717,11 @@ const CAMGOV = (() => {
     lumaG: 0, lumaH: 0, p10: 0, p90: 0,   // raw-frame luma (0..1)
     zone: "fixed", zoneBox: [0.2, 0.3, 0.8, 1.0],  // where hands live
     handBox: null, lastHandT: 0,
-    gain: 1, target: 0.42, gainMax: 3.5,  // software lift: gain = target/lumaH
+    gain: 1, target: TUNE.light.target, gainMax: TUNE.light.gainMax,  // software lift: gain = target/lumaH
     exp: 1, lumaL: 0,                     // the gamma exponent applied; lifted hand-zone luma
     handBoxes: [],                        // every tracked hand's bbox this frame
-    floor: 0.12,           // raw hand-zone luma below this = too dark to lift
-    back: 1.5,             // return to FAST when est. FAST luma > floor*back
+    floor: TUNE.light.floor,   // raw hand-zone luma below this = too dark to lift
+    back: TUNE.light.back,     // return to FAST when est. FAST luma > floor*back
     darkSince: 0, brightSince: 0, flipT: 0, applying: false, why: "",
     gainLock: null, clinic: false,
   };
@@ -1788,7 +1842,7 @@ const CAMGOV = (() => {
     // soon as the lift alone could carry it
     if (G.have && !G.applying && now - G.toneT > 2500) {
       const wantUp = G.lumaH < G.toneUp && G.gain > G.gainMax * 0.95 &&
-                     G.tone < TONE.length - 1;
+                     G.tone < Math.min(TONE.length - 1, TUNE.light.toneMax);
       const wantDn = G.lumaH > G.toneDown && G.tone > 0;
       if (wantUp || wantDn) {
         if (!G.toneSince) G.toneSince = now;
@@ -1807,14 +1861,14 @@ const CAMGOV = (() => {
     if (G.state === "fast") {
       if (G.lumaH < G.floor) {
         if (!G.darkSince) G.darkSince = now;
-        else if (now - G.darkSince > 3000) apply("light", "too dark to lift");
+        else if (now - G.darkSince > TUNE.light.darkMs) apply("light", "too dark to lift");
       } else G.darkSince = 0;
     } else {
       // LIGHT exposes ~30/fps longer: estimate what FAST would see
       const est = G.lumaH * Math.min(1, (fps || 30) / 30);
       if (est > G.floor * G.back) {
         if (!G.brightSince) G.brightSince = now;
-        else if (now - G.brightSince > 5000) apply("fast", "light is back");
+        else if (now - G.brightSince > TUNE.light.brightMs) apply("fast", "light is back");
       } else G.brightSince = 0;
     }
   }
@@ -1981,8 +2035,8 @@ const CLINIC = (() => {
 // for A/B in the clinic. Every gate downstream reads the same numbers
 // it always did — just steadier.
 const HANDS = (() => {
-  const GRACE = 200;                // ms a vanished hand stays a ghost
-  const GATE = 0.35;                // max wrist travel (normalized) to re-match
+  const GRACE = TUNE.hands.graceMs;   // ms a vanished hand stays a ghost
+  const GATE = TUNE.hands.gate;       // max wrist travel (normalized) to re-match
   const SMOOTH = Q.get("smooth") !== "0";
   const TAU = (c) => 1 / (2 * Math.PI * c);
   class OneEuro {
@@ -2003,11 +2057,14 @@ const HANDS = (() => {
     }
   }
   const F = {};                     // id -> 21x3 filters
+  const E = TUNE.hands.euro;
   let nextId = 0;
   function mk() {
     const a = [];
     for (let k = 0; k < 21; k++)
-      a.push([new OneEuro(1.5, 8, 1), new OneEuro(1.5, 8, 1), new OneEuro(1.0, 8, 1)]);
+      a.push([new OneEuro(E.minCutoff, E.beta, E.dCutoff),
+              new OneEuro(E.minCutoff, E.beta, E.dCutoff),
+              new OneEuro(E.zMinCutoff, E.beta, E.dCutoff)]);
     return a;
   }
   function assign(res, now) {       // detection index -> stable cursor id
@@ -2235,7 +2292,7 @@ function endGrab(c, i, cur) {
       const tMs = performance.now() - (cur.grabT || 0);
       const tTrav = Math.hypot(cur.x - (c.tapX || cur.x),
                                cur.y - (c.tapY || cur.y));
-      if (tMs < 300 && tTrav < 26) openPanel(c);
+      if (tMs < TUNE.tap.ms && tTrav < TUNE.tap.px) openPanel(c);
     }
     // GESTURE v3.1 (2026-08-14, the crush is DEAD — "that is happening
     // too naturally"): THE TAP IS SYMMETRIC — tap opens closed things,
@@ -2309,7 +2366,7 @@ function endGrab(c, i, cur) {
       // a drag's echoes have decayed by then. Speed bar at 1500,
       // thrown anywhere he likes — including hand to hand.
       {
-        if (pk > 1300 && lastS > pk * 0.4) {   // v3.9.25: throw bar eased
+        if (pk > TUNE.fling.peak && lastS > pk * TUNE.fling.follow) {   // v3.9.25: throw bar eased
           // v16: on a note in SCROLL mode only a clearly HORIZONTAL fling
           // closes (vertical fast releases are just energetic scrolling);
           // in promoted MOVE mode (and on cards) any fling tosses it.
@@ -2521,17 +2578,67 @@ function makeLandmarker() {
     // instead of one: this, THE SANITY BOUND (aspect > 6), and THE
     // HANDS' identity/grace layer (a ghost that blinks never inherits
     // a real hand's grab).
-    minHandDetectionConfidence: 0.65,
+    minHandDetectionConfidence: TUNE.detector.detect,
     // v3.9.9 (his blur diagnosis: fast hands smear and get DROPPED,
     // and re-acquisition eats the frames that felt like grab-lag):
     // KEEP-tracking eased to 0.5 so a latched hand rides through blur;
     // fresh DETECTION stays higher — the busy-background ghost wall.
     // 2026-08-23: 0.45 — a marginal second hand, once found, is kept.
-    minHandPresenceConfidence: 0.45,
-    minTrackingConfidence: 0.45 });
+    minHandPresenceConfidence: TUNE.detector.presence,
+    minTrackingConfidence: TUNE.detector.track });
+}
+
+// THE BOARD FILE: the server persists what is on the glass (state/board.json);
+// after a reload the stage puts it back. ?fresh=1 boots empty.
+async function restoreBoard() {
+  let saved = null;
+  try {
+    const r = await fetch("/board", { cache: "no-store" });
+    saved = r.ok ? await r.json() : null;
+  } catch (_) {}
+  const rows = (saved && saved.items) || [];
+  let n = 0;
+  for (const s of rows) {
+    let it = null;
+    try {
+      if (s.type === "card" && s.title) {
+        it = makeCard({ title: s.title, body: s.body || "", file: s.file || "" });
+      } else if (s.type === "img" && s.src) {
+        it = makeImage(s.src, s.title);
+      } else if (s.type === "model" && s.src) {
+        it = makeModel(s.src, s.title, s.mm, s.lf);
+        if (s.ex) it.ex = s.ex;
+      } else if (s.type === "panel" && s.file) {
+        const carrier = makeCard({ title: s.title || "", body: "", file: s.file });
+        carrier.el.remove();                 // the carrier card never shows
+        await openPanel(carrier);            // pushes the panel itself
+        it = items.find(k => k.type === "panel" && k.def === carrier.def) || null;
+      }
+    } catch (_) { it = null; }
+    if (!it) continue;
+    it.x = (s.x ?? 0.5) * innerWidth; it.y = (s.y ?? 0.4) * innerHeight;
+    if (s.scale) it.scale = s.scale;
+    if (s.rx) it.rx = s.rx;
+    if (s.ry) it.ry = s.ry;
+    if (s.rz) it.rz = s.rz;
+    if (s.type !== "panel") items.push(it);
+    n++;
+  }
+  if (n) toast(`restored ${n} item${n > 1 ? "s" : ""} from the last session`, 2500);
 }
 
 async function boot() {
+  // the config's camera defaults (jarvis.json "res" / "fps") apply when
+  // the URL didn't say — the launcher no longer has to carry them
+  try {
+    const cfg = await (await fetch("/config", { cache: "no-store" })).json();
+    const m = !RES_FROM_URL && /^(\d{3,4})x(\d{3,4})$/i.exec(cfg.res || "");
+    if (m) RES = [+m[1], +m[2]];
+    const f = String(cfg.fps || "").toLowerCase();
+    if (!Q.get("fps") && !localStorage.getItem("stage-light") &&
+        (f === "fast" || f === "30" || f === "light"))
+      CAMGOV.G.mode = f === "light" ? "light" : "fast";
+  } catch (_) {}
   await pickInitialCam();
   _vision = await FilesetResolver.forVisionTasks(
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
@@ -2570,7 +2677,8 @@ async function boot() {
   document.getElementById("boot").remove();
   await loadTree();
   spawnStage();
-  toast("barehands v1.0", 2000);  // build fingerprint
+  if (Q.get("fresh") !== "1") await restoreBoard();
+  toast("jarvis v2.0", 2000);  // build fingerprint
   let lastT = performance.now();
 
   function frame(now) {
@@ -2606,8 +2714,22 @@ async function boot() {
         cur.mcpX = _m.x; cur.mcpY = _m.y;
         const gap = Math.hypot(lms[4].x - lms[8].x, lms[4].y - lms[8].y);
         const ratio = span > 0 ? gap / span : 1;
+        // THE WORLD LANE (jarvis, 2026-08-23): MediaPipe also returns the
+        // hand in metric 3D (worldLandmarks, metres, hand-centred). The
+        // thumb-tip↔index-tip distance THERE is the same number whether
+        // the palm faces the lens or the knuckles do — the 2D gap ratio
+        // above is angle-polluted (a touching profile pinch reads wider
+        // than a frontal near-pinch; the comments below have fought that
+        // for thirty versions). wcm = that distance in centimetres; NaN
+        // when the model gives no world hand. It joins the TOUCH test as
+        // a second admitting lane (the signature laws still judge).
+        const wl = (res.worldLandmarks || [])[mi];
+        const wcm = wl ? 100 * Math.hypot(wl[4].x - wl[8].x, wl[4].y - wl[8].y,
+                                          wl[4].z - wl[8].z) : NaN;
+        cur.wcm = wcm; cur.lmRaw = lmsRaw;
         const px = (tip.x + thumb.x) / 2, py = (tip.y + thumb.y) / 2;
-        cur.x += (px - cur.x) * 0.45; cur.y += (py - cur.y) * 0.45;
+        cur.x += (px - cur.x) * TUNE.hands.cursorLerp;
+        cur.y += (py - cur.y) * TUNE.hands.cursorLerp;
         cur.history.push({ x: cur.x, y: cur.y, t: now });
         if (cur.history.length > 10) cur.history.shift();   // v3.6: peak-fling window
 
@@ -2679,9 +2801,10 @@ async function boot() {
         // knuckle-row distance judges, backed by the aspect rail. The
         // gap ceiling still enforces touch: his near-pinch reads r
         // 0.44–0.63, far above the 0.32 bar.
-        const okBack = (backMean - f8v > 0.18 && backMean > 1.30) ||
-                       (aspect < 2.0 && tRel > 0.95) ||
-                       (tRel > 0.58 && aspect > 2.7);
+        const TP = TUNE.pinch;
+        const okBack = (backMean - f8v > TP.contrast && backMean > TP.backFloor) ||
+                       (aspect < TP.profileAspect && tRel > TP.profileT) ||
+                       (tRel > TP.curledT && aspect > TP.curledAspect);
         // v3.8.3 (his tap report: drag fixed, tap still flaky) — the
         // EMA charged too slow for a snap-tap (~6 frames): rate up to
         // 0.30 = three clean consecutive frames (~100ms) to trust,
@@ -2712,11 +2835,11 @@ async function boot() {
         // v3.9.25 (still too sticky): the fast-release bar eased
         // 0.85→0.70 — blur under-reads a throwing hand's open, and the
         // 2-frame sustain already guards the phantom spikes
-        const relBar = hspd > 800 ? 0.70 : 0.55;
+        const relBar = hspd > TP.fastSpd ? TP.relFast : TP.relSlow;
         // v3.9.9: at speed, a release must be SEEN OPEN two frames
         // running — a single blur spike can't fake a throw
         const openRead = ratio >= relBar;
-        const relOk = hspd > 800 ? (openRead && cur.openPrev) : openRead;
+        const relOk = hspd > TP.fastSpd ? (openRead && cur.openPrev) : openRead;
         cur.openPrev = openRead;
         // v3.9.12 (his second left-hand reading topped 0.28 — riding
         // whatever ceiling gets set): the gap number is so angle-
@@ -2746,15 +2869,20 @@ async function boot() {
         // (v3.9.31: the visibility clause is GONE — the hand model
         // carries the field but never populates it, so it read 0 on
         // every frame and declared every real hand a hallucination)
-        const handGarbage = aspect > 6;
+        const handGarbage = aspect > TP.sanityAspect;
         if (handGarbage) cur.probKill = true;   // garbage drops mute taps
         // v3.9.32 (his final pinch sample: perfect signature, gap
         // 0.22-0.30 vs the 0.22 frontal ceiling): frontal eased to
         // 0.32 — the contrast law carries the touch duty.
+        // TOUCH = the 2D gap under its regime ceiling, OR the world lane
+        // (metric tips under worldTouchCm; 0 in tuning.json disables it)
+        const touch2d = ratio < (aspect < TP.profileAspect ? TP.gapRotated : TP.gapFrontal);
+        const touch3d = TP.worldTouchCm > 0 && wcm === wcm && wcm < TP.worldTouchCm;
+        cur.touchLane = touch3d && !touch2d ? "world" : touch2d ? "2d" : "";
         cur.pinched = handGarbage ? false
                     : wasPinched ? !relOk
-                                 : ratio < (aspect < 2.0 ? 0.38 : 0.32) &&
-                                   (okNow || cur.okEma > 0.55 || holdingI);
+                                 : (touch2d || touch3d) &&
+                                   (okNow || cur.okEma > TP.emaBar || holdingI);
         // v3.9.15 — PINCH PROBATION (his fold-through catch: closing a
         // hand into a curl passes THROUGH a lawful OK-sign for two
         // frames — index meets thumb while the back fingers are still
@@ -3028,7 +3156,7 @@ async function boot() {
           // when the hand is claw-ish but not a claw, name the missing
           // piece, at most once per 1.6s. No threshold moved.
           if (!claw && fp.ph === 0 && !cur.pinched && !inClaw &&
-              now - (cur.lastOpenT || 0) < 1500 && ratio > 0.5 &&
+              now - (cur.lastOpenT || 0) < TUNE.claw.openWindowMs && ratio > 0.5 &&
               cMean < 0.7 && extFingers <= 3 &&
               now - (cur.coachT || 0) > 1600) {
             let why = null;
@@ -3049,6 +3177,7 @@ async function boot() {
             inC: inClaw ? 1 : 0, pose: (cur.fp && cur.fp.pose) || 0,
             ph: cur.fp ? cur.fp.ph : 0, open: Math.round(now - (cur.lastOpenT || 0)),
             ext: extFingers, hit: hitTest(cur) ? 1 : 0,
+            w: wcm === wcm ? +wcm.toFixed(1) : undefined,
             aim: cur.fp && cur.fp.ph ? cur.aim : undefined, lit: cur.fp ? cur.fp.tId : null };
           if (!cur.fpDbgT || now - cur.fpDbgT > 400) {
             cur.fpDbgT = now;                // readable refresh rate
@@ -3066,6 +3195,8 @@ async function boot() {
               SAMPLER.h12.push(c12);
               SAMPLER.h16.push(c16); SAMPLER.h20.push(c20);
               SAMPLER.s.push(spread); SAMPLER.a.push(aspect);
+              if (!SAMPLER.w) SAMPLER.w = [];
+              if (wcm === wcm) SAMPLER.w.push(wcm);
               const fRs = (t, m) => {
                 const td = Math.hypot(lms[t].x - W0.x, lms[t].y - W0.y);
                 const md = Math.hypot(lms[m].x - W0.x, lms[m].y - W0.y);
@@ -3091,7 +3222,8 @@ async function boot() {
                         ` · s ${stat(SAMPLER.s)} · a ${stat(SAMPLER.a)}\n` +
                         `PINCH f8 ${stat(SAMPLER.f8 || [])} · f12 ` +
                         `${stat(SAMPLER.f12 || [])} · f16 ${stat(SAMPLER.f16 || [])}` +
-                        ` · f20 ${stat(SAMPLER.f20 || [])} · t ${stat(SAMPLER.t || [])}`;
+                        ` · f20 ${stat(SAMPLER.f20 || [])} · t ${stat(SAMPLER.t || [])}` +
+                        ` · w(cm) ${stat(SAMPLER.w || [])}`;
               toast(SAMPLED, 20000);
               SAMPLER = null;
             }
@@ -3131,12 +3263,12 @@ async function boot() {
             // the transition law's whole point survives.
             const _over = fp.pose >= 14 && hitTest(cur);
             if (!heldAny && fp.pose >= 14 && !_over &&
-                now - (cur.lastOpenT || 0) < 1500) {
+                now - (cur.lastOpenT || 0) < TUNE.claw.openWindowMs) {
               fp.ph = 1; fp.lost = 0; fp.tId = null; fp.told = 0;
             } else if (fp.pose >= 20 && !heldAny && !fp.told) {
               // the honest tell, once per run: WHY it didn't arm
               fp.told = 1;
-              if (now - (cur.lastOpenT || 0) >= 1500)
+              if (now - (cur.lastOpenT || 0) >= TUNE.claw.openWindowMs)
                 toast("claw ignored — flash OPEN first, then claw", 1300);
               else if (_over)
                 toast("claw over an item — claw from clear space, then aim", 1300);
@@ -3158,7 +3290,7 @@ async function boot() {
               // hand the ceremony IS the cost): strain cut to 800ms.
               // The transition law + pose gates still make an
               // accidental pull nearly impossible.
-              if (now - (fp.litT || 0) >= 800) {
+              if (now - (fp.litT || 0) >= TUNE.claw.strainMs) {
                 const t = items.find(k => k.id === fp.tId);
                 unlight(); fp.ph = 0;
                 if (t && !t.grabbedBy.length && t.el.isConnected) {
@@ -3340,6 +3472,7 @@ async function boot() {
           cur.dbgLine = `hand ${i}: pinch ${ratio.toFixed(2)} ${cur.pinched ? "CLOSED" : "open"}` +
             ` ok ${okBack ? 1 : 0} ema ${(cur.okEma || 0).toFixed(2)} t ${tRel.toFixed(2)}` +
             ` back ${backMean.toFixed(2)} f8 ${f8v.toFixed(2)} a ${aspect.toFixed(2)} v ${hspd | 0}` +
+            ` w ${wcm === wcm ? wcm.toFixed(1) + "cm" : "-"}${cur.touchLane ? " " + cur.touchLane : ""}` +
             `\n  palm ${cur.palmOpen ? "OPEN" : "-"}${cur.fpSplay ? " CLAW" : ""} pull ph${cur.fp ? cur.fp.ph : 0}` +
             `  ${cur.fpDbg || ""}`;
       });
@@ -3348,13 +3481,18 @@ async function boot() {
         for (const k of Object.keys(cursors)) {
           const c = cursors[k];
           if (!c.seenNow) continue;
-          row.h.push({ id: +k, l: c.label || "", hs: c.hsc, p: c.pinched ? 1 : 0,
-                       x: +c.x.toFixed(0), y: +c.y.toFixed(0), ...(c.dbg || {}) });
+          const hr = { id: +k, l: c.label || "", hs: c.hsc, p: c.pinched ? 1 : 0,
+                       x: +c.x.toFixed(0), y: +c.y.toFixed(0), ...(c.dbg || {}) };
+          if (c.wcm === c.wcm) hr.w = +c.wcm.toFixed(1);      // world gap, cm
+          if (c.touchLane) hr.tl = c.touchLane;                // which lane admitted
+          if (TUNE.tape.raw && c.lmRaw)                        // the 21 raw landmarks
+            hr.lm = c.lmRaw.map(p => [+p.x.toFixed(4), +p.y.toFixed(4), +p.z.toFixed(4)]);
+          row.h.push(hr);
         }
         if (row.h.length >= 2 && clap.tele) row.clap = clap.tele;
         if (PERF.clapT && Date.now() - PERF.clapT < 100) row.clapFired = PERF.clapHow;
-        TAPE.push(row);
-        if (TAPE.length > 30 * 180) TAPE.shift();
+        if (TAPE.length < TAPE_MAX) TAPE.push(row);
+        else { TAPE[TAPE_I] = row; TAPE_I = (TAPE_I + 1) % TAPE_MAX; }
       }
       Object.keys(cursors).map(Number).forEach(i => {   // THE HANDS: ghosts, then lost
         if (seen.has(i)) return;
@@ -3411,7 +3549,7 @@ async function boot() {
           const bothOpen =
             (A.softOpen || now - (A.lastSoftT || 0) < 250) &&
             (B.softOpen || now - (B.lastSoftT || 0) < 250);
-          const bothUp = (A.handUp || 0) > 0.85 && (B.handUp || 0) > 0.85;
+          const bothUp = (A.handUp || 0) > TUNE.clap.up && (B.handUp || 0) > TUNE.clap.up;
           clap.hist.push({ t: now, w: wristD,
                            q: (bothOpen && bothUp) ? 1 : 0,
                            up: Math.min(A.handUp || 0, B.handUp || 0) });
@@ -3450,7 +3588,7 @@ async function boot() {
         const vanished = now - last.t < 250 && cids.length === 0;
         if (now - last.t < 200 && last.q && last.w < innerWidth * 0.16 &&
             apart && clapCool) clapFire();
-        else if (vanished && qualified && apart && closing >= 500 && clapCool)
+        else if (vanished && qualified && apart && closing >= TUNE.clap.closing && clapCool)
           clapFire("strike");
         else if (now - last.t >= 250) clap.hist.length = 0;
       }
@@ -3466,7 +3604,7 @@ async function boot() {
               ax: A.x, ay: A.y, bx: B.x, by: B.y,
               o: ((A.softOpen || now - (A.lastSoftT || 0) < 250) &&
                   (B.softOpen || now - (B.lastSoftT || 0) < 250)) ? 1 : 0,
-              u: ((A.handUp || 0) > 0.85 && (B.handUp || 0) > 0.85) ? 1 : 0,
+              u: ((A.handUp || 0) > TUNE.clap.up && (B.handUp || 0) > TUNE.clap.up) ? 1 : 0,
               p: (A.pinched || B.pinched) ? 1 : 0 });
           }
         } else {
@@ -3539,6 +3677,7 @@ function pushState(now) {
   if (now - lastPush < 22) return;
   lastPush = now;
   const st = {
+    ack: CMD_ACK,
     perf: { det: +PERF.det.toFixed(1), loop: +PERF.loop.toFixed(1),
             raf: +PERF.raf.toFixed(1), fps, log: window._mpLog || undefined,
             rearm: PERF.rearm || 0, rearmT: PERF.rearmT || 0, up: Math.round(performance.now() / 1000),
