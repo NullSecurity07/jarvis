@@ -10,6 +10,8 @@
 <pre id="out">starting…</pre>
 <script type="module">
 import { createIdentity, dist } from "./js/identity.js";
+import { createFaces } from "./js/faces.js";
+import { FilesetResolver, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 const out = document.getElementById("out"), log = (s) => { out.textContent += "\n" + s; };
 const v = document.getElementById("v"), crop = document.getElementById("crop");
 const mode = new URLSearchParams(location.search).get("mode");   // ?mode=main forces the fallback
@@ -22,38 +24,52 @@ if (ID.workerError) log(`workerError: ${ID.workerError}`);
 if (!ok) throw new Error("identity unavailable");
 v.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
 await new Promise(r => v.onloadedmetadata = r);
-log("camera on — look at it; sampling 10 descriptors of the centre crop…");
-const cx = crop.getContext("2d");
+
+// ---- the tracker: FaceLandmarker beside identity, like the stage. Loaded
+// before sampling so identity.describe() gets an ALIGNED chip (iris-based)
+// instead of a raw centre crop — TinyFaceDetector finds no face in a plain
+// 160px centre crop on this camera, so recognition-only needs the tracker's
+// alignment to have anything to score at all.
+log("loading FaceLandmarker (MediaPipe)…");
 const vecs = [];
+const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+const tune = { face: { everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4, blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25 }, owner: {} };
+const FACES = createFaces({ FaceLandmarker, vision, identity: ID, tune, owner: () => ({ vecs: vecs.map(x => Array.from(x)) }) });
+log(`faces ready=${await FACES.ready} ${FACES.error || ""}`);
+
+const line = document.createElement("pre"); document.body.appendChild(line);
+(function loop() {
+  FACES.tick(v, v, performance.now());
+  line.textContent = `face ${FACES.perf.face.toFixed(1)}ms id ${FACES.perf.id.toFixed(0)}ms\n` +
+    FACES.list().map(f => `#${f.id} ${f.seenNow ? "" : "(ghost) "}c ${f.cx.toFixed(2)},${f.cy.toFixed(2)} w ${f.w.toFixed(2)} eye ${f.eyeOpen.toFixed(2)} blink ${((performance.now() - f.blinkT) / 1000).toFixed(1)}s ago yaw ${f.yaw.toFixed(0)} pitch ${f.pitch.toFixed(0)} att ${f.attention ? 1 : 0} score ${Number.isFinite(f.score) ? f.score.toFixed(3) : "-"}`).join("\n");
+  requestAnimationFrame(loop);
+})();
+
+log("camera on — look at it; sampling 10 descriptors via the tracked face's aligned chip…");
+const cropCx = crop.getContext("2d");
 for (let k = 0; k < 10; k++) {
-  // centre crop (the stage will crop the tracked face box instead)
-  const s = Math.min(v.videoWidth, v.videoHeight) * 0.6;
-  cx.drawImage(v, (v.videoWidth - s) / 2, (v.videoHeight - s) / 2, s, s, 0, 0, 160, 160);
-  const oc = new OffscreenCanvas(160, 160); oc.getContext("2d").drawImage(crop, 0, 0);
-  const vec = await ID.describe(oc);
-  log(`#${k} ${vec ? "descriptor ok" : "no face in crop"} ${ID.perf.ms.toFixed(0)}ms`);
-  if (vec) vecs.push(vec);
+  const f = FACES.list().find(f => f.seenNow);
+  if (!f) {
+    log(`#${k} no face`);
+  } else {
+    const chip = FACES.chip(f, v);
+    let vec = null;
+    if (chip) {
+      cropCx.clearRect(0, 0, 160, 160); cropCx.drawImage(chip, 0, 0, 160, 160);
+      // identity.describe() rejects with "busy" if the tracker's own
+      // scheduled scoring (faces.js's score(), driven by the tick loop
+      // above) is mid-job on the same engine — skip this sample, not fatal.
+      try { vec = await ID.describe(chip); }
+      catch (e) { /* busy: try the next sample */ }
+    }
+    log(`#${k} ${vec ? "descriptor ok" : chip ? "busy/no descriptor" : "chip too small (eyes not far enough apart)"} ${ID.perf.ms.toFixed(0)}ms`);
+    if (vec) vecs.push(vec);
+  }
   await new Promise(r => setTimeout(r, 400));
 }
 if (vecs.length >= 2) {
   let mx = 0; for (let i = 1; i < vecs.length; i++) mx = Math.max(mx, dist(vecs[0], vecs[i]));
   log(`same-face spread: max distance ${mx.toFixed(3)} (matchDist 0.5 must stay above this)`);
 }
-log("done");
-
-// ---- faces readout: the FaceLandmarker beside identity, like the stage
-import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs").then(async (mp) => {
-  const { createFaces } = await import("./js/faces.js");
-  const vision = await mp.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-  const tune = { face: { everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4, blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25 }, owner: {} };
-  const FACES = createFaces({ FaceLandmarker: mp.FaceLandmarker, vision, identity: ID, tune, owner: () => ({ vecs: vecs.map(x => Array.from(x)) }) });
-  log(`faces ready=${await FACES.ready} ${FACES.error || ""}`);
-  const line = document.createElement("pre"); document.body.appendChild(line);
-  (function loop() {
-    FACES.tick(v, v, performance.now());
-    line.textContent = `face ${FACES.perf.face.toFixed(1)}ms id ${FACES.perf.id.toFixed(0)}ms\n` +
-      FACES.list().map(f => `#${f.id} ${f.seenNow ? "" : "(ghost) "}c ${f.cx.toFixed(2)},${f.cy.toFixed(2)} w ${f.w.toFixed(2)} eye ${f.eyeOpen.toFixed(2)} blink ${((performance.now() - f.blinkT) / 1000).toFixed(1)}s ago yaw ${f.yaw.toFixed(0)} pitch ${f.pitch.toFixed(0)} att ${f.attention ? 1 : 0} score ${Number.isFinite(f.score) ? f.score.toFixed(3) : "-"}`).join("\n");
-    requestAnimationFrame(loop);
-  })();
-});
+log("done — the live faces readout above keeps running (score is you-vs-you once vecs exist)");
 </script>

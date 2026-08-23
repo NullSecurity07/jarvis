@@ -14,9 +14,6 @@ export function createFaces({ FaceLandmarker, vision, identity, tune, owner }) {
   const F = () => tune.face, faces = new Map();
   const S = { perf: { face: 0, id: 0, every: 1 }, error: null, _n: 0, _lm: null, _ready: false, _slow: 0, _fast: 0 };
   let nextId = 0;
-  const crop = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(160, 160) : document.createElement("canvas");
-  if (!crop.getContext) { crop.width = 160; crop.height = 160; }
-  const cropCtx = crop.getContext("2d", { alpha: false });
 
   S.ready = (async () => {
     try {
@@ -56,6 +53,24 @@ export function createFaces({ FaceLandmarker, vision, identity, tune, owner }) {
     for (const p of pairs) { if (ids[p.mi] != null || taken.has(p.id)) continue; ids[p.mi] = p.id; taken.add(p.id); }
     return ids.map(id => id == null ? nextId++ : id);
   }
+  S.chip = (f, video) => {          // aligned 150x150 face chip from iris landmarks
+    const L = f.irisL, R = f.irisR;
+    if (!L || !R) return null;
+    const W = video.videoWidth, H = video.videoHeight;
+    const lx = L.x * W, ly = L.y * H, rx = R.x * W, ry = R.y * H;
+    const ex = (lx + rx) / 2, ey = (ly + ry) / 2;
+    const d = Math.hypot(rx - lx, ry - ly);
+    f.eyePx = d;
+    if (d < 8) return null;
+    const ang = Math.atan2(ry - ly, rx - lx);
+    const SZ = 150, scale = (SZ * 0.38) / d;
+    const c = S._chip || (S._chip = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(150, 150) : Object.assign(document.createElement("canvas"), { width: 150, height: 150 }));
+    const x = c.getContext("2d", { alpha: false });
+    x.setTransform(1, 0, 0, 1, 0, 0); x.fillStyle = "#000"; x.fillRect(0, 0, 150, 150);
+    x.translate(75, 63); x.rotate(-ang); x.scale(scale, scale); x.translate(-ex, -ey);
+    x.drawImage(video, 0, 0);
+    return c;
+  };
   async function score(f, video, now) {   // one descriptor per face, scheduled
     if (!identity || !identity.isReady() || f._scoring) return;
     const O = owner && owner();
@@ -63,19 +78,16 @@ export function createFaces({ FaceLandmarker, vision, identity, tune, owner }) {
     if (f.scoredT && now - f.scoredT < F().idEveryMs) return;
     f._scoring = true;
     try {
-      const pad = 0.25, vw = video.videoWidth, vh = video.videoHeight;
-      const bx = Math.max(0, (f.box.x - f.box.w * pad) * vw), by = Math.max(0, (f.box.y - f.box.h * pad) * vh);
-      const bw = Math.min(vw - bx, f.box.w * (1 + 2 * pad) * vw), bh = Math.min(vh - by, f.box.h * (1 + 2 * pad) * vh);
-      const s = Math.max(bw, bh);
-      cropCtx.fillStyle = "#000"; cropCtx.fillRect(0, 0, 160, 160);
-      cropCtx.drawImage(video, bx, by, s, s, 0, 0, 160, 160);
-      const vec = await identity.describe(crop);
-      f.scoredT = now; f.lastVec = vec || null;
-      if (vec) {
-        f._hist = (f._hist || []).concat([matchScore(vec, O)]).slice(-3);
-        f.score = Math.min(...f._hist);
+      const chip = S.chip(f, video);
+      if (chip) {
+        const vec = await identity.describe(chip);
+        f.scoredT = now; f.lastVec = vec || null;
+        if (vec) {
+          f._hist = (f._hist || []).concat([matchScore(vec, O)]).slice(-3);
+          f.score = Math.min(...f._hist);
+        }
+        S.perf.id = identity.perf.ms;
       }
-      S.perf.id = identity.perf.ms;
     } catch (e) { /* busy: try again next frame */ }
     f._scoring = false;
   }

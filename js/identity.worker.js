@@ -1,4 +1,7 @@
-// js/identity.worker.js — face-api descriptors off the main thread.
+// js/identity.worker.js — face-api descriptors off the main thread. The
+// caller (faces.js) already aligned the face into a 150x150 chip via
+// MediaPipe iris landmarks; this worker just runs faceRecognitionNet on it,
+// no detection of its own.
 // jarvis · SPDX-License-Identifier: AGPL-3.0-or-later
 let faceapi = null, ready = false;
 self.onmessage = async (e) => {
@@ -21,11 +24,7 @@ self.onmessage = async (e) => {
       });
       await faceapi.tf.setBackend("webgl").catch(() => faceapi.tf.setBackend("cpu"));
       await faceapi.tf.ready();
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(m.base),
-        faceapi.nets.faceLandmark68TinyNet.loadFromUri(m.base),
-        faceapi.nets.faceRecognitionNet.loadFromUri(m.base),
-      ]);
+      await faceapi.nets.faceRecognitionNet.loadFromUri(m.base);
       ready = true;
       postMessage({ t: "ready", backend: faceapi.tf.getBackend() });
     } catch (err) {
@@ -45,14 +44,14 @@ self.onmessage = async (e) => {
       const c = new OffscreenCanvas(m.bitmap.width, m.bitmap.height);
       const cx = c.getContext("2d");
       cx.drawImage(m.bitmap, 0, 0);
-      // detectSingleFace's dimension code doesn't accept an OffscreenCanvas
-      // directly in a worker — feed it a tensor built from ImageData instead.
+      // the bitmap is already an aligned 150x150 chip (faces.js's S.chip) —
+      // no detection needed. computeFaceDescriptor's dimension code doesn't
+      // accept an OffscreenCanvas directly in a worker — feed it a tensor
+      // built from ImageData instead.
       const imageData = cx.getImageData(0, 0, c.width, c.height);
       tensor = faceapi.tf.browser.fromPixels(imageData);
-      const r = await faceapi.detectSingleFace(tensor,
-        new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.3 }))
-        .withFaceLandmarks(true).withFaceDescriptor();
-      vec = r ? r.descriptor : null;
+      const d = await faceapi.nets.faceRecognitionNet.computeFaceDescriptor(tensor);
+      vec = d || null;
     } catch (err) {
       vec = null;
     } finally {

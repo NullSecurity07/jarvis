@@ -1,7 +1,10 @@
 // js/identity.js — WHO is this face. face-api.js 128-d descriptors, run in a
 // Web Worker when the machine allows (OffscreenCanvas + WebGL in a worker),
-// on the main thread otherwise, never more than one job at a time. The pure
-// math (dist / matchScore) is what the policy's `score` comes from.
+// on the main thread otherwise, never more than one job at a time. The
+// engine no longer detects a face itself — the caller (faces.js) aligns an
+// already-tracked face into a 150x150 chip via MediaPipe iris landmarks and
+// hands that chip in; describe() runs only faceRecognitionNet on it. The
+// pure math (dist / matchScore) is what the policy's `score` comes from.
 // jarvis · SPDX-License-Identifier: AGPL-3.0-or-later
 
 export function dist(a, b) {
@@ -41,11 +44,7 @@ export function createIdentity({ lib = FACE_API_LIB, base = FACE_API_MODELS,
   async function loadMain() {
     faceapi = await import(lib);
     await faceapi.tf.ready();
-    await Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri(base),
-      faceapi.nets.faceLandmark68TinyNet.loadFromUri(base),
-      faceapi.nets.faceRecognitionNet.loadFromUri(base),
-    ]);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(base);
     ID.mode = "main";
   }
   function loadWorker() {
@@ -117,12 +116,12 @@ export function createIdentity({ lib = FACE_API_LIB, base = FACE_API_MODELS,
       c.getContext("2d").drawImage(canvas, 0, 0);
       input = c;
     }
+    // canvas is already an aligned 150x150 chip (faces.js's S.chip) — no
+    // detection needed, just the recognition net's descriptor.
     const t0 = performance.now();
-    const r = await faceapi.detectSingleFace(input,
-      new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.3 }))
-      .withFaceLandmarks(true).withFaceDescriptor();
+    const vec = await faceapi.nets.faceRecognitionNet.computeFaceDescriptor(input);
     ID.perf.ms = performance.now() - t0; ID.perf.n++;
-    return r ? r.descriptor : null;
+    return vec || null;
   }
   ID.describe = async (canvas) => {
     if (!ID._ready) return null;
