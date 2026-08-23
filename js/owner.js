@@ -19,6 +19,17 @@ export const TUNE_FACE_DEFAULTS = {
   blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25,
 };
 
+// liveness: the owner candidate blinked or moved their head within
+// livenessMs, eyes open enough to trust the read. Shared by decide() (the
+// owner candidate) and the stage heartbeat (every tracked face) so the two
+// never drift apart.
+export function isLive(f, tune, now) {
+  const F = { ...TUNE_FACE_DEFAULTS, ...((tune && tune.face) || {}) };
+  const T = { ...TUNE_OWNER_DEFAULTS, ...((tune && tune.owner) || {}) };
+  return f.eyeOpen > F.eyeOpenMin &&
+    !!((f.blinkT && now - f.blinkT < T.livenessMs) || (f.moveT && now - f.moveT < T.livenessMs));
+}
+
 export function decide(input, tune, prev = {}) {
   const T = { ...TUNE_OWNER_DEFAULTS, ...((tune && tune.owner) || {}) };
   const F = { ...TUNE_FACE_DEFAULTS, ...((tune && tune.face) || {}) };
@@ -59,8 +70,7 @@ export function decide(input, tune, prev = {}) {
   for (const f of faces) {
     if (Number.isFinite(f.score) && f.score < T.matchDist && (!owner || f.score < owner.score)) owner = f;
   }
-  const live = !!owner && owner.eyeOpen > F.eyeOpenMin &&
-    ((owner.blinkT && now - owner.blinkT < T.livenessMs) || (owner.moveT && now - owner.moveT < T.livenessMs));
+  const live = !!owner && isLive(owner, tune, now);
   if (live) {
     st.ownerSeenT = now;
     st.lastOwner = { id: owner.id, cx: owner.cx, cy: owner.cy, w: owner.w };

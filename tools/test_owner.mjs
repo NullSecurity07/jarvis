@@ -1,7 +1,7 @@
 // tools/test_owner.mjs — run: node --test tools/test_owner.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decide, TUNE_OWNER_DEFAULTS, TUNE_FACE_DEFAULTS } from "../js/owner.js";
+import { decide, isLive, TUNE_OWNER_DEFAULTS, TUNE_FACE_DEFAULTS } from "../js/owner.js";
 
 const T = { owner: { ...TUNE_OWNER_DEFAULTS }, face: { ...TUNE_FACE_DEFAULTS } };
 const owner = (o = {}) => ({ id: 1, cx: 0.5, cy: 0.4, w: 0.2, score: 0.3, eyeOpen: 0.9, blinkT: 900, moveT: 900, ...o });
@@ -131,6 +131,11 @@ test("guests never unlock: owner leaves with an approved guest present", () => {
   const v = decide(base({ now: t1 + T.owner.graceMs + 10, approvals,
     faces: [other({ cx: 0.55, cy: 0.62 })], hands: [hand({ id: 11, wx: 0.56, wy: 0.8 })] }), T, up.state);
   assert.equal(v.locked, true); assert.equal(v.handRole[11], "none");
+});
+
+test("isLive matches what decide() treats as live", () => {
+  assert.equal(isLive(owner({ blinkT: 0, moveT: 0 }), T, 1000), false);
+  assert.equal(isLive(owner({ blinkT: 950, moveT: 0 }), T, 1000), true);
 });
 
 test("the best-scoring matching face is the owner when two faces match", () => {

@@ -240,6 +240,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      fully removed 2026-08-13 — the line was killed 8/11 but its
      tracker half survived the baseline; Jared field-caught it.) */
   #behind { position:fixed; inset:0; z-index:1; perspective:1200px; }
+  /* THE OWNER LOCK: the glass frosts when the owner is away — nothing on
+     it can be read; the ring stays clear and says LOCKED. Disallowed
+     hands get no cursor at all. */
+  #behind { transition: filter .35s ease; }
+  body.locked #behind { filter: blur(18px) brightness(0.55) saturate(0.6); }
+  body.locked .cursor, .cursor.blocked { display:none; }
+  body.locked #hint { color:#ff9f9f; }
+  #facelayer { position:fixed; inset:0; z-index:3; pointer-events:none; }
+  .facering { position:absolute; border:2px solid rgba(111,229,214,0.85); border-radius:12px;
+              box-shadow:0 0 12px rgba(111,229,214,0.35); transition: border-color .2s; }
+  .facering.owner { border-color:rgba(120,255,170,0.9); box-shadow:0 0 14px rgba(120,255,170,0.4); }
+  .facering.guest { border-color:rgba(111,229,214,0.9); }
+  .facering.guest-away, .facering.unknown { border-color:rgba(200,200,200,0.5); border-style:dashed; box-shadow:none; }
+  .facering.candidate { border-color:rgba(255,220,120,0.9); }
+  .facering.stranger { border-color:rgba(255,90,90,0.9); box-shadow:0 0 14px rgba(255,90,90,0.4); }
+  body.overlay #facelayer, body.keybg #facelayer { display:none; }
   /* (an earlier whole-screen voice-pulse border was removed —
      THE RING is the assistant's presence now.) */
   #boot { position:absolute; inset:0; display:flex; align-items:center;
@@ -289,6 +305,7 @@ setTimeout(function () {
 </script>
 <video id="cam" autoplay playsinline muted></video>
 <div id="behind"></div>
+<div id="facelayer"></div>
 <div id="boot">JARVIS<br><span style="color:#a8d8cf;font-size:13px">loading hand tracker… allow the camera when asked</span></div>
 <div id="hint">tap the RING = orbs · tap an orb = its tree · TAP a card = open · pinch-drag = move · hold still ~1s = 3D rotate · two hands = scale · TAP an open item = close · CLAP (palms together, fingers up) = ring center-stage · CLAW: flash open, then freeze thumb+pinky and half-hook the other three (C facing the camera), aim, let it strain ~1s, SNAP = force pull · empty pinch dragged sideways = explode scrub · R respawn / C camera / D debug</div>
 <div id="debug"></div>
@@ -320,7 +337,7 @@ import { HandLandmarker, FaceLandmarker, FilesetResolver } from
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 import { createIdentity } from "./js/identity.js";
 import { createFaces } from "./js/faces.js";
-import { decide } from "./js/owner.js";
+import { decide, isLive } from "./js/owner.js";
 
 // ---- THE TUNING FILE. Every hand-fitted number the gates read lives in
 // tuning.json (GET /tuning) and lands here BEFORE any module code below
@@ -557,7 +574,8 @@ const RING = {
   // colors, SUBTLE state shifts — a deep-blue listening state was
   // unreadable and died)
   COLS: { idle: [140, 235, 240], listening: [120, 205, 250],
-          thinking: [170, 245, 250], speaking: [140, 235, 240] },
+          thinking: [170, 245, 250], speaking: [140, 235, 240],
+          locked: [255, 110, 110] },
   MOODT: { red: [255, 82, 82], amber: [255, 179, 71], green: null },
 };
 setInterval(async () => {
@@ -624,7 +642,8 @@ function drawRing(sc) {
   // NO spin — the ring is still; ONE solid thick band + solid hot
   // rim; SPEAKING = the band pulses HOT WHITE on the live voice.
   // Core is CLEAR glass, wordmark + status sized to fill it.
-  const d = RING.data, st = d.state || "idle";
+  const d = RING.data;
+  const st = (LOCK.verdict && LOCK.verdict.locked && LOCK.enabled) ? "locked" : (d.state || "idle");
   const amp = st === "speaking" ? ringAmp() : (RING.amp *= 0.9);
   const t = Date.now() / 1000;          // wall clock: pages in sync
   const base = RING.COLS[st] || RING.COLS.idle;
@@ -712,7 +731,7 @@ function drawRing(sc) {
   x.fillStyle = col(0.98);
   x.font = "600 14px 'SF Mono', Menlo, monospace";
   const status = { idle: "ACTIVE", listening: "LISTENING",
-                   thinking: "THINKING", speaking: "SPEAKING" }[st];
+                   thinking: "THINKING", speaking: "SPEAKING", locked: "LOCKED" }[st];
   x.fillText((status || "ACTIVE").split("").join(" "), 0, 28);
   x.shadowBlur = 0; x.globalAlpha = 1;
   x.restore();
@@ -1288,6 +1307,12 @@ function applyCmds(cmds) {
     } else if (c.a === "light") {         // ...and set the light governor
       const m = ["auto", "fast", "light"].includes(c.mode) ? c.mode : "auto";
       CAMGOV.setMode(m, !!c.persist);
+    } else if (c.a === "lock") {            // runtime override: {"on":0} opens the board, {"on":1} re-arms
+      LOCK.override = c.on === 0 || c.on === "0" || c.on === false;
+      toast(LOCK.override ? "owner lock OVERRIDDEN (cmd lock on:0)" : "owner lock armed", 2000);
+    } else if (c.a === "enroll") {          // forget the owner, re-arm the auto window
+      fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) })
+        .then(() => { LOCK.owner = null; LOCK.enrolled = false; LOCK.enroll = null; LOCK.state = {}; toast("owner forgotten — look at the camera alone for 3s to enroll", 4000); }).catch(() => {});
     } else if (c.a === "clear") {
       items.forEach(killItem);          // scorched earth — ring included
     } else if (c.a === "reset") {
@@ -2653,6 +2678,77 @@ async function restoreBoard() {
   if (n) toast(`restored ${n} item${n > 1 ? "s" : ""} from the last session`, 2500);
 }
 
+// THE OWNER LOCK, applied: frost, hint, face rings, approvals bookkeeping.
+const FACELAYER = document.getElementById("facelayer");
+const FACERINGS = new Map();     // face id -> element
+function applyVerdict(V, now) {
+  const wasLocked = LOCK.verdict ? LOCK.verdict.locked : null;
+  LOCK.verdict = V; LOCK.state = V.state;
+  if (V.locked !== wasLocked) {
+    LOCK.since = now;
+    document.body.classList.toggle("locked", !!V.locked && V.enabled);
+    if (V.enabled) toast(V.locked ? `LOCKED — ${V.why}` : "unlocked — welcome back", 1800);
+  }
+  for (const id of V.revoke) { delete LOCK.approvals[id]; }
+  const hint = document.getElementById("hint");
+  if (V.enabled && V.locked) hint.dataset.lock = `LOCKED — ${V.why}`;
+  else delete hint.dataset.lock;
+  // the self-view rings (tracker only; the render page never draws them)
+  const live = new Set();
+  for (const f of FACES.list()) {
+    if (!f.seenNow) continue;
+    live.add(f.id);
+    let el = FACERINGS.get(f.id);
+    if (!el) { el = document.createElement("div"); el.className = "facering"; FACELAYER.appendChild(el); FACERINGS.set(f.id, el); }
+    const role = V.faceRole[f.id] || "unknown";
+    el.className = "facering " + role;
+    const a = toScreen({ x: f.box.x, y: f.box.y }), b = toScreen({ x: f.box.x + f.box.w, y: f.box.y + f.box.h });
+    const L = Math.min(a.x, b.x), R = Math.max(a.x, b.x);
+    el.style.left = L + "px"; el.style.top = a.y + "px"; el.style.width = (R - L) + "px"; el.style.height = (b.y - a.y) + "px";
+  }
+  for (const [id, el] of FACERINGS) if (!live.has(id)) { el.remove(); FACERINGS.delete(id); }
+}
+// the hint bar shows the lock reason while locked, its own text otherwise
+{
+  const hint = document.getElementById("hint");
+  hint.dataset.text = hint.textContent;
+  setInterval(() => { const want = hint.dataset.lock || hint.dataset.text; if (hint.textContent !== want) hint.textContent = want; }, 250);
+}
+// THE AUTO-ENROLL: no owner on file → the first face that is alone,
+// attentive, and steady for enrollMs becomes the owner. Collects a
+// descriptor spread across the window (head angles differ), posts it
+// once, never again. A second face in frame restarts the window.
+async function enrollTick(now) {
+  if (LOCK.enrolled || !LOCK.enabled || !IDENT || !IDENT.isReady() || !FACES) return;
+  const fs = FACES.list().filter(f => f.seenNow);
+  if (fs.length !== 1 || !fs[0].attention) { LOCK.enroll = null; return; }
+  const f = fs[0];
+  if (!LOCK.enroll || LOCK.enroll.id !== f.id) { LOCK.enroll = { id: f.id, startT: now, vecs: [], yaws: [], lastT: 0, busy: false }; toast("enrolling you as the owner — look at the camera…", 1500); }
+  const E = LOCK.enroll;
+  if (E.busy || now - E.lastT < 350) return;
+  E.busy = true; E.lastT = now;
+  try {
+    // THE HANDS convention (Task 4 ruling): identity's pipeline is
+    // aligned-chip → faceRecognitionNet only; FACES.chip is the one
+    // aligner, so enrollment reuses it rather than cropping its own box.
+    const chipC = FACES.chip(f, cam);
+    if (!chipC) { E.busy = false; return; }
+    const vec = await IDENT.describe(chipC);
+    if (vec) { E.vecs.push(Array.from(vec)); E.yaws.push(f.yaw); }
+  } catch (_) { /* IDENT.describe may throw "busy" (the FACES scorer shares the engine) — try again next tick */ }
+  E.busy = false;
+  const spread = E.yaws.length ? Math.max(...E.yaws) - Math.min(...E.yaws) : 0;
+  if (now - E.startT >= TUNE.owner.enrollMs && E.vecs.length >= 6 && spread > 8) {
+    const payload = { vecs: E.vecs.slice(-12), at: Date.now() };
+    try {
+      const r = await fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (r.ok) { LOCK.owner = payload; LOCK.enrolled = true; LOCK.enroll = null; toast("enrolled you as the owner — the board is yours", 4000); }
+    } catch (_) {}
+  } else if (now - E.startT >= TUNE.owner.enrollMs * 3 && spread <= 8) {
+    toast("turn your head a little left and right to finish enrolling", 1500); E.startT = now - TUNE.owner.enrollMs + 1500;
+  }
+}
+
 async function boot() {
   // the config's camera defaults (jarvis.json "res" / "fps") apply when
   // the URL didn't say — the launcher no longer has to carry them
@@ -2737,6 +2833,9 @@ async function boot() {
         FACES.tick(_src, cam, now);            // THE FACES, same frame
         // the budget rule: hands + face over 24ms for a while → every 2nd
         // frame; back to every frame under 16ms
+        // FACES.perf.face is a per-RUN EMA (skipped frames don't update
+        // it), so det+face compares the true un-amortized cost against
+        // the budget even at every=2
         const tot = PERF.det + FACES.perf.face;
         if (tot > 24 && FACES.perf.every === 1) { FACES._slow++; if (FACES._slow > 90) { FACES.setEvery(2); FACES._slow = 0; } }
         else if (tot < 16 && FACES.perf.every > 1) { FACES._fast++; if (FACES._fast > 150) { FACES.setEvery(1); FACES._fast = 0; } }
@@ -2745,8 +2844,34 @@ async function boot() {
       CLINIC.tick(now, res);               // the camera clinic's recorder
       const seen = new Set();
       const ids = HANDS.assign(res, now);    // stable ids (THE HANDS)
+      // THE OWNER LOCK rules before any gesture reads a hand
+      enrollTick(now);
+      const handsIn = (res.landmarks || []).map((lms, mi) => ({
+        id: ids[mi], wx: lms[0].x, wy: lms[0].y,
+        span: Math.hypot(lms[0].x - lms[9].x, lms[0].y - lms[9].y) }));
+      const V = decide({ now, enabled: LOCK.enabled, enrolled: LOCK.enrolled,
+                         identityReady: !!(IDENT && IDENT.isReady()), lockOverride: LOCK.override,
+                         faces: FACES ? FACES.list() : [], hands: handsIn, approvals: LOCK.approvals },
+                       TUNE, LOCK.state);
+      applyVerdict(V, now);
       (res.landmarks || []).forEach((lmsRaw, mi) => {
         const i = ids[mi];
+        { // THE OWNER LOCK: a hand that is not the owner's or a guest's never
+          // reaches a gesture. Its cursor stays (so the id survives) but is
+          // hidden, releases whatever it held like a vanished hand (no tap,
+          // no fling), and reads un-pinched.
+          const role = V.handRole[i] || "owner";
+          const blocked = role !== "owner" && role !== "guest";
+          const curB = getCursor(i);
+          if (blocked !== !!curB.blocked) { curB.blocked = blocked; curB.el.classList.toggle("blocked", blocked); }
+          if (blocked) {
+            curB.seenT = now; curB.seenNow = false; curB.pinched = false;
+            items.forEach(c => { if (c.grabbedBy.includes(i)) { curB.lost = true; endGrab(c, i, curB); curB.lost = false; } });
+            curB.wN = { x: lmsRaw[0].x, y: lmsRaw[0].y };
+            return;
+          }
+          curB.role = role;
+        }
         const lms = HANDS.smooth(i, lmsRaw, now);
         if (mi === 0) CLINIC.tickSmooth(now, lms);
         seen.add(i);
@@ -3737,7 +3862,7 @@ function pushState(now) {
     faces: FACES ? FACES.list().filter(f => f.seenNow).map(f => ({
       id: f.id, role: (LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "unknown",
       x: +f.cx.toFixed(3), y: +f.cy.toFixed(3), w: +f.w.toFixed(3), h: +f.h.toFixed(3),
-      live: (f.eyeOpen > TUNE.face.eyeOpenMin && (performance.now() - f.blinkT < TUNE.owner.livenessMs || performance.now() - f.moveT < TUNE.owner.livenessMs)) ? 1 : 0,
+      live: isLive(f, TUNE, performance.now()) ? 1 : 0,
       att: f.attention ? 1 : 0, eye: +f.eyeOpen.toFixed(2),
       score: Number.isFinite(f.score) ? +f.score.toFixed(3) : null })) : [],
     perf: { det: +PERF.det.toFixed(1), face: FACES ? +FACES.perf.face.toFixed(1) : 0, faceEvery: FACES ? FACES.perf.every : 0, id: FACES ? +FACES.perf.id.toFixed(0) : 0, loop: +PERF.loop.toFixed(1),
