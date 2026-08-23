@@ -289,8 +289,29 @@ setTimeout(function () {
 <div id="hint">tap the RING = orbs · tap an orb = its tree · TAP a card = open · pinch-drag = move · hold still ~1s = 3D rotate · two hands = scale · TAP an open item = close · CLAP (palms together, fingers up) = ring center-stage · CLAW: flash open, claw, aim, hold the strain 2s, SNAP = force pull · empty pinch dragged sideways = explode scrub · R respawn / C camera / D debug</div>
 <div id="debug"></div>
 <div id="toast"></div>
+<!-- THE LIFT: a gamma curve for the detector's input (shadows up, highlights
+     kept — a backlit hand brightens without the window clipping to white) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="liftf" color-interpolation-filters="sRGB">
+    <feComponentTransfer>
+      <feFuncR type="gamma" amplitude="1" exponent="1" offset="0"/>
+      <feFuncG type="gamma" amplitude="1" exponent="1" offset="0"/>
+      <feFuncB type="gamma" amplitude="1" exponent="1" offset="0"/>
+    </feComponentTransfer>
+  </filter>
+</svg>
 
 <script type="module">
+// THE BLACK BOX: any uncaught error on the tracker lands in state/errors.log
+// via POST /dump — so whoever is tuning remotely can read why a boot died.
+addEventListener("error", e => { try { fetch("/dump", { method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ err: String(e.message), at: `${e.filename}:${e.lineno}:${e.colno}`,
+                         stack: e.error && e.error.stack }) }); } catch (_) {} });
+addEventListener("unhandledrejection", e => { try { fetch("/dump", { method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ err: "unhandled: " + String(e.reason && e.reason.message || e.reason),
+                         stack: e.reason && e.reason.stack }) }); } catch (_) {} });
 import { HandLandmarker, FilesetResolver } from
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
@@ -342,6 +363,7 @@ let SAMPLER = null;    // the pose sampler (dormant — claw/pinch tuning)
 let CLAPSAMP = null;   // the P clap recorder (v3.9.1)
 let SAMPLED = "";      // its frozen last result (D overlay)
 let landmarker = null, lastVideoTs = -1, frames = 0, fps = 0, lastFpsTs = performance.now();
+const TAPE = [];       // THE TAPE: ~3 min ring of per-frame hand anatomy (cmd dump)
 // 2026-08-23 perf probes (EMA ms): det = detectForVideo, loop = physics
 // + renders, raf = frame-to-frame gap. Streamed via /state for tuning.
 const PERF = { det: 0, loop: 0, raf: 0, lastNow: 0, pre: 0 };   // pre = detector-input prep
@@ -1175,6 +1197,9 @@ function applyCmds(cmds) {
   (cmds || []).forEach(c => {
     if (c.a === "reload") {               // after an update: fresh code, same window
       location.reload();
+    } else if (c.a === "dump") {          // the last ~3 min of hand anatomy → /dump
+      fetch("/dump", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ at: Date.now(), fps, rows: TAPE }) }).catch(() => {});
     } else if (c.a === "clinic") {        // your AI can run the camera clinic
       CLINIC.start();
     } else if (c.a === "light") {         // ...and set the light governor
@@ -1632,7 +1657,9 @@ const CAMGOV = (() => {
     lumaG: 0, lumaH: 0, p10: 0, p90: 0,   // raw-frame luma (0..1)
     zone: "fixed", zoneBox: [0.2, 0.3, 0.8, 1.0],  // where hands live
     handBox: null, lastHandT: 0,
-    gain: 1, target: 0.42, gainMax: 3.0,  // software lift for the detector
+    gain: 1, target: 0.42, gainMax: 3.0,  // software lift: gain = target/lumaH
+    exp: 1, lumaL: 0,                     // the gamma exponent applied; lifted hand-zone luma
+    handBoxes: [],                        // every tracked hand's bbox this frame
     floor: 0.12,           // raw hand-zone luma below this = too dark to lift
     back: 1.5,             // return to FAST when est. FAST luma > floor*back
     darkSince: 0, brightSince: 0, flipT: 0, applying: false, why: "",
@@ -1686,47 +1713,69 @@ const CAMGOV = (() => {
     if (G.have) apply(want(), m === "auto" ? "auto" : "your call");
     else toast(`light: ${m} (no /cam bridge — telemetry only)`, 2000);
   }
-  function noteHand(lms, now) {   // the tracked hand's padded bbox (raw coords)
+  function noteHand(lms, now) {   // a tracked hand's padded bbox (raw coords)
     let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
     for (const p of lms) {
       if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
       if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y;
     }
     const pw = (x1 - x0) * 0.25 + 0.02, ph = (y1 - y0) * 0.25 + 0.02;
-    G.handBox = [Math.max(0, x0 - pw), Math.max(0, y0 - ph),
+    const box = [Math.max(0, x0 - pw), Math.max(0, y0 - ph),
                  Math.min(1, x1 + pw), Math.min(1, y1 + ph)];
-    G.lastHandT = now;
+    if (G.lastHandT !== now) G.handBoxes = [];   // new frame: fresh list
+    G.handBoxes.push(box); G.handBox = box; G.lastHandT = now;
   }
+  const lumaOf = (d, W, H, box) => {    // median + p10/p90 of a box on a WxH sample
+    const x0 = Math.floor(box[0] * W), y0 = Math.floor(box[1] * H);
+    const x1 = Math.max(x0 + 1, Math.ceil(box[2] * W));
+    const y1 = Math.max(y0 + 1, Math.ceil(box[3] * H));
+    const v = [];
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const i = (y * W + x) * 4;
+      v.push((0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255);
+    }
+    v.sort((a, b) => a - b);
+    return { med: v[v.length >> 1] || 0, p10: v[v.length / 10 | 0] || 0,
+             p90: v[Math.min(v.length - 1, v.length * 0.9 | 0)] || 0 };
+  };
   let lastMeter = 0;
   function meter(now, cam) {      // ~2Hz light meter + the auto policy
     if (now - lastMeter < 500 || !cam.videoWidth) return;
     lastMeter = now;
     mx.drawImage(cam, 0, 0, 64, 36);
     const d = mx.getImageData(0, 0, 64, 36).data;
-    const hb = (G.handBox && now - G.lastHandT < 2000) ? G.handBox : G.zoneBox;
-    G.zone = hb === G.zoneBox ? "fixed" : "hand";
-    const x0 = Math.floor(hb[0] * 64), y0 = Math.floor(hb[1] * 36);
-    const x1 = Math.max(x0 + 1, Math.ceil(hb[2] * 64));
-    const y1 = Math.max(y0 + 1, Math.ceil(hb[3] * 36));
-    const all = [], zone = [];
-    for (let y = 0; y < 36; y++) for (let x = 0; x < 64; x++) {
-      const i = (y * 64 + x) * 4;
-      const l = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
-      all.push(l);
-      if (x >= x0 && x < x1 && y >= y0 && y < y1) zone.push(l);
+    G.lumaG = lumaOf(d, 64, 36, [0, 0, 1, 1]).med;
+    // THE NEEDIEST HAND: meter every tracked hand's box and take the
+    // darkest — the lift serves the hand that is struggling (the one
+    // against the window), not the one already near the screen. With
+    // fewer than two hands tracked the fixed zone (where a second hand
+    // would appear) votes too; with none, it is all we have.
+    const fresh = now - G.lastHandT < 2000 ? G.handBoxes : [];
+    const boxes = fresh.length ? fresh.slice() : [];
+    if (boxes.length < 2) boxes.push(G.zoneBox);
+    let need = null, bright = 0;
+    for (const b of boxes) {
+      const L = lumaOf(d, 64, 36, b);
+      if (!need || L.med < need.med) need = L;
+      if (b !== G.zoneBox && L.p90 > bright) bright = L.p90;
     }
-    all.sort((a, b) => a - b); zone.sort((a, b) => a - b);
-    G.lumaG = all[all.length >> 1] || 0;
-    G.lumaH = zone[zone.length >> 1] || 0;
-    G.p10 = zone[zone.length / 10 | 0] || 0;
-    G.p90 = zone[Math.min(zone.length - 1, zone.length * 0.9 | 0)] || 0;
-    // software lift: bring the hand zone to target; when the zone IS a
-    // tracked hand, never clip it (p90 stays under white)
+    G.zone = fresh.length ? (boxes.length > fresh.length ? "hand+zone" : "hands") : "fixed";
+    G.lumaH = need.med; G.p10 = need.p10; G.p90 = need.p90;
+    // software lift as a GAMMA curve: shadows up, highlights kept — so a
+    // tracked bright hand never clips while a dark one is lifted
     let gWant = G.target / Math.max(G.lumaH, 0.02);
-    if (G.zone === "hand") gWant = Math.min(gWant, 0.98 / Math.max(G.p90, 0.05));
     gWant = Math.min(G.gainMax, Math.max(1, gWant));
     if (G.gainLock != null) G.gain = G.gainLock;     // the clinic pins it
     else G.gain += (gWant - G.gain) * 0.25;
+    // gain → gamma exponent: lumaH^e = min(1, lumaH*gain)  (e in [0.35, 1])
+    const lh = Math.min(0.95, Math.max(0.02, G.lumaH));
+    const want = Math.min(0.95, lh * G.gain);
+    G.exp = G.gain <= 1.02 ? 1 : Math.max(0.35, Math.min(1, Math.log(want) / Math.log(lh)));
+    if (pc.width && G.exp < 1) {                       // verify: what the detector sees
+      mx.drawImage(pc, 0, 0, 64, 36);
+      G.lumaL = lumaOf(mx.getImageData(0, 0, 64, 36).data, 64, 36,
+                       fresh.length ? fresh[0] : G.zoneBox).med;
+    } else G.lumaL = G.lumaH;
     if (G.clinic) return;                              // the clinic drives
     // the tone ladder (any mode): dark hand zone climbs, bright descends
     if (G.have && !G.applying && now - G.toneT > 2500) {
@@ -1760,12 +1809,20 @@ const CAMGOV = (() => {
       } else G.brightSince = 0;
     }
   }
+  const liftFns = ["R", "G", "B"].map(c => document.querySelector(`#liftf feFunc${c}`));
+  let liftExp = 1;
   function src(cam) {             // what the detector sees
-    if (G.gain < 1.03 || !cam.videoWidth) return cam;
+    if (G.exp >= 0.995 || !cam.videoWidth) return cam;
     if (pc.width !== cam.videoWidth || pc.height !== cam.videoHeight) {
       pc.width = cam.videoWidth; pc.height = cam.videoHeight;
     }
-    px.filter = `brightness(${G.gain.toFixed(2)})`;
+    const e = +G.exp.toFixed(3);
+    if (e !== liftExp) {
+      liftExp = e;
+      liftFns.forEach(f => f.setAttribute("exponent", e));
+      px.filter = "none";                              // re-resolve the url()
+    }
+    px.filter = "url(#liftf)";
     px.drawImage(cam, 0, 0);
     return pc;
   }
@@ -1774,8 +1831,8 @@ const CAMGOV = (() => {
     return { md: G.mode, st: G.state, tone: G.tone, bridge: !!G.have,
              dyn: h.exposure_dynamic_framerate, exp: h.exposure_time_absolute,
              gamma: h.gamma, lg: +G.lumaG.toFixed(3), lh: +G.lumaH.toFixed(3),
-             p10: +G.p10.toFixed(3), gain: +G.gain.toFixed(2), zone: G.zone,
-             pre: +PERF.pre.toFixed(1) };
+             p10: +G.p10.toFixed(3), gain: +G.gain.toFixed(2), exp: +G.exp.toFixed(2),
+             ll: +G.lumaL.toFixed(3), zone: G.zone, pre: +PERF.pre.toFixed(1) };
   }
   return { G, FAST, LIGHT, TONE, onStream, setMode, meter, noteHand, src, apply,
            post, readback, telemetry };
@@ -1970,6 +2027,7 @@ const HANDS = (() => {
       const c = getCursor(ids[mi]);
       c.wN = { x: lms[0].x, y: lms[0].y };
       c.label = hd[mi]?.[0]?.categoryName || c.label || "";
+      c.hsc = hd[mi]?.[0]?.score ?? c.hsc;
     });
     return ids;
   }
@@ -2447,12 +2505,20 @@ function makeLandmarker() {
     // and false-trigger gestures). 0.65 helped but the ghost
     // survived → 0.7. Ease back toward 0.65 if real-hand pickup ever
     // feels laggy; past 0.75 real tracking suffers.
-    minHandDetectionConfidence: 0.7,
+    // 2026-08-23 (J4RVIS rig, "the second hand often isn't found" —
+    // the hand raised against the bright window): eased to 0.65, the
+    // floor the note above sanctions. Ghosts now have three walls
+    // instead of one: this, THE SANITY BOUND (aspect > 6), and THE
+    // HANDS' identity/grace layer (a ghost that blinks never inherits
+    // a real hand's grab).
+    minHandDetectionConfidence: 0.65,
     // v3.9.9 (his blur diagnosis: fast hands smear and get DROPPED,
     // and re-acquisition eats the frames that felt like grab-lag):
     // KEEP-tracking eased to 0.5 so a latched hand rides through blur;
-    // fresh DETECTION stays 0.7 — the busy-background ghost wall holds.
-    minHandPresenceConfidence: 0.5 });
+    // fresh DETECTION stays higher — the busy-background ghost wall.
+    // 2026-08-23: 0.45 — a marginal second hand, once found, is kept.
+    minHandPresenceConfidence: 0.45,
+    minTrackingConfidence: 0.45 });
 }
 
 async function boot() {
@@ -2945,6 +3011,13 @@ async function boot() {
           const snap = ratio < 0.34 ||
                        (ratio < 0.48 && rPeak - ratio > 0.22);
           cur.fpSplay = claw;                // debug-overlay telemetry
+          cur.dbg = {                        // the claw's anatomy, on the wire
+            r: +ratio.toFixed(2), a: +aspect.toFixed(2),
+            c: [c8, c12, c16, c20].map(v => +v.toFixed(2)), cm: +cMean.toFixed(2),
+            h: [h8, h12, h16].map(v => +v.toFixed(2)), claw: claw ? 1 : 0,
+            inC: inClaw ? 1 : 0, pose: (cur.fp && cur.fp.pose) || 0,
+            ph: cur.fp ? cur.fp.ph : 0, open: Math.round(now - (cur.lastOpenT || 0)),
+            ext: extFingers, hit: hitTest(cur) ? 1 : 0 };
           if (!cur.fpDbgT || now - cur.fpDbgT > 400) {
             cur.fpDbgT = now;                // readable refresh rate
             cur.fpDbg = `r:${ratio.toFixed(2)} ` +
@@ -2998,7 +3071,18 @@ async function boot() {
           };
           // v3.5: a one-frame tracking hiccup used to zero the pose
           // streak (the "only triggers sometimes") — now it decays
-          fp.pose = claw ? (fp.pose || 0) + 1 : Math.max(0, (fp.pose || 0) - 5);
+          // 2026-08-23 THE HELD-POSE CLOCK: the streak used to be counted
+          // in FRAMES (+1 hit / −5 miss, arm at 14 = "~half a second" at
+          // the 30fps it was written for — but 0.8s at the 17fps this rig
+          // ran at, and a single flicker cost five hits). The governor
+          // now swaps 17↔31fps live, so the streak is a CLOCK: hits add
+          // their frame time, a miss costs 100ms, arming at 450ms — the
+          // same half second at any rate. `pose` is kept as frames-at-
+          // 30fps (ms/33) so the arm/toast reads below stay as written.
+          if (!fp.ms) fp.ms = 0;
+          const _fdt = Math.min(50, now - (fp.lastT || now)); fp.lastT = now;
+          fp.ms = claw ? fp.ms + (_fdt || 33) : Math.max(0, fp.ms - 100);
+          fp.pose = Math.round(fp.ms / 33.3);
           if (fp.ph === 0) {
             // v7 THE TRANSITION LAW (2026-08-14, Jared's field find:
             // "anytime my hand was arched it thought I was summoning" —
@@ -3013,14 +3097,18 @@ async function boot() {
             // the claw slower than the 900ms transition window): widened
             // to 1500ms. A drifting arch still never flashes open, so
             // the transition law's whole point survives.
-            if (!heldAny && fp.pose >= 14 && !hitTest(cur) &&
+            const _over = fp.pose >= 14 && hitTest(cur);
+            if (!heldAny && fp.pose >= 14 && !_over &&
                 now - (cur.lastOpenT || 0) < 1500) {
-              fp.ph = 1; fp.lost = 0; fp.tId = null;
-            } else if (fp.pose === 20 && !heldAny &&
-                       now - (cur.lastOpenT || 0) >= 1500) {
-              // the honest tell for a drift-in arch (once per run)
-              toast("claw ignored — flash OPEN first, then claw", 1300);
-            }
+              fp.ph = 1; fp.lost = 0; fp.tId = null; fp.told = 0;
+            } else if (fp.pose >= 20 && !heldAny && !fp.told) {
+              // the honest tell, once per run: WHY it didn't arm
+              fp.told = 1;
+              if (now - (cur.lastOpenT || 0) >= 1500)
+                toast("claw ignored — flash OPEN first, then claw", 1300);
+              else if (_over)
+                toast("claw over an item — claw from clear space, then aim", 1300);
+            } else if (fp.pose === 0) fp.told = 0;
           } else {
             if (claw) fp.lost = 0;
             else if (!fp.lost) fp.lost = now;
@@ -3208,6 +3296,17 @@ async function boot() {
             `\n  palm ${cur.palmOpen ? "OPEN" : "-"}${cur.fpSplay ? " CLAW" : ""} pull ph${cur.fp ? cur.fp.ph : 0}` +
             `  ${cur.fpDbg || ""}`;
       });
+      { // THE TAPE — one compact row per detected frame, 3 minutes deep
+        const row = { t: Math.round(now), h: [] };
+        for (const k of Object.keys(cursors)) {
+          const c = cursors[k];
+          if (!c.seenNow) continue;
+          row.h.push({ id: +k, l: c.label || "", hs: c.hsc, p: c.pinched ? 1 : 0,
+                       x: +c.x.toFixed(0), y: +c.y.toFixed(0), ...(c.dbg || {}) });
+        }
+        TAPE.push(row);
+        if (TAPE.length > 30 * 180) TAPE.shift();
+      }
       Object.keys(cursors).map(Number).forEach(i => {   // THE HANDS: ghosts, then lost
         if (seen.has(i)) return;
         const c = cursors[i]; c.seenNow = false;
@@ -3373,7 +3472,8 @@ function pushState(now) {
     cursors: Object.keys(cursors).sort().filter(k => cursors[k].seenNow).map(k => {
       const c = cursors[k];
       return { x: +(c.x / innerWidth).toFixed(4), y: +(c.y / innerHeight).toFixed(4),
-               p: c.pinched ? 1 : 0, d: 0 };
+               p: c.pinched ? 1 : 0, d: 0, id: +k, lbl: c.label || "",
+               hs: c.hsc == null ? undefined : +c.hsc.toFixed(2), ...(c.dbg || {}) };
     }),
     items: items.filter(i => i.el.isConnected).map(i => {
       // charge glow now serves the hover verb only (dwell-open retired

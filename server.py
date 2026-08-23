@@ -98,7 +98,7 @@ _STATE = b"{}"          # latest scene state: tracker POSTs, render GETs
 _CMDS = []              # queued board commands (your AI -> tracker)
 _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
             "yank", "hover", "scroll_note", "widget", "explode", "assemble",
-            "present", "clinic", "light", "reload")
+            "present", "clinic", "light", "reload", "dump")
 
 # ---- THE CAMERA BRIDGE (/cam). Chrome can't reach every V4L2 control
 # (exposure_dynamic_framerate, the ROI metering pair), and those are the
@@ -187,7 +187,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         global _STATE
         n = int(self.headers.get("Content-Length", 0) or 0)
-        body = self.rfile.read(n) if 0 < n < 262144 else b"{}"
+        cap = 8_000_000 if self.path == "/dump" else 262144
+        body = self.rfile.read(n) if 0 < n < cap else b"{}"
         if self.path == "/state":
             # the tracker's heartbeat doubles as the command channel
             _STATE = body
@@ -198,6 +199,21 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(out)))
             self.end_headers()
             self.wfile.write(out)
+            return
+        if self.path == "/dump":
+            # the stage's tape (cmd dump) lands in state/tape.json for
+            # whoever is tuning — your AI reads it, fits, and edits
+            try:
+                (HERE / "state").mkdir(exist_ok=True)
+                if b'"err"' in body[:64]:       # the tracker's black box
+                    with open(HERE / "state" / "errors.log", "ab") as f:
+                        f.write(time.strftime("%H:%M:%S ").encode() + body + b"\n")
+                else:
+                    (HERE / "state" / "tape.json").write_bytes(body)
+                self.send_response(204)
+            except Exception:
+                self.send_response(500)
+            self.end_headers()
             return
         if self.path == "/cam":
             # live camera controls from the stage (the light governor,
