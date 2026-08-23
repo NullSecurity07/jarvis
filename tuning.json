@@ -1,42 +1,132 @@
 {
-  "_about": "jarvis tuning — every gesture/camera number the stage reads at boot (GET /tuning). Fitted to THIS hand with the clinic (P sampler / K clinic / the tape). Edit, then `bin/board.sh '{\"a\":\"reload\"}'`. Missing keys fall back to the stage's built-in defaults (identical to these).",
-
+  "_about": "jarvis tuning \u2014 every gesture/camera number the stage reads at boot (GET /tuning). Fitted to THIS hand with the clinic (P sampler / K clinic / the tape). Edit, then `bin/board.sh '{\"a\":\"reload\"}'`. Missing keys fall back to the stage's built-in defaults (identical to these).",
   "detector": {
     "_": "MediaPipe HandLandmarker confidences. detect = fresh detection (the busy-background ghost wall, 0.65); presence/track = keeping a hand once found (0.45: a marginal second hand, once found, is kept).",
-    "detect": 0.65, "presence": 0.45, "track": 0.45
+    "detect": 0.65,
+    "presence": 0.45,
+    "track": 0.45
   },
-
   "hands": {
     "_": "THE HANDS: identity + grace + smoothing. graceMs = how long a vanished hand stays a ghost (no tap/fling fires). gate = max wrist travel (normalized) to re-match an id. euro = One-Euro filter (minCutoff: lower = steadier at rest; beta: higher = sharper in motion). cursorLerp = the cursor's per-frame chase toward the pinch point (1 = raw).",
-    "graceMs": 200, "gate": 0.35,
-    "euro": { "minCutoff": 1.5, "beta": 8, "dCutoff": 1, "zMinCutoff": 1.0 },
+    "graceMs": 200,
+    "gate": 0.35,
+    "euro": {
+      "minCutoff": 1.5,
+      "beta": 8,
+      "dCutoff": 1,
+      "zMinCutoff": 1.0
+    },
     "cursorLerp": 0.45
   },
-
   "pinch": {
     "_": "THE PINCH. Three admitting signatures (any one): CONTRAST (frontal OK-sign: backMean-f8 > contrast && backMean > backFloor), PROFILE (aspect < profileAspect && tRel > profileT), CURLED (this hand's natural pinch: tRel > curledT && aspect > curledAspect; clinic 2026-08-23: pinch t .64-.70/a 2.80-3.41 vs fist t .12-.52/a 2.06-2.63). Touch = 2D gap ratio under the ceiling (gapFrontal / gapRotated for aspect < profileAspect) OR THE WORLD LANE: metric thumb-tip/index-tip distance from MediaPipe's world landmarks under worldTouchCm centimetres (orientation-proof; 0 disables). Release: ratio >= relSlow, or relFast when the hand moves faster than fastSpd px/s (two frames running). emaBar = the charged-EMA admit bar. sanityAspect = palm aspect above which the hand is a hallucination.",
-    "contrast": 0.18, "backFloor": 1.30,
-    "profileAspect": 2.0, "profileT": 0.95,
-    "curledT": 0.58, "curledAspect": 2.7,
-    "gapFrontal": 0.32, "gapRotated": 0.38,
+    "contrast": 0.18,
+    "backFloor": 1.3,
+    "profileAspect": 2.0,
+    "profileT": 0.95,
+    "curledT": 0.58,
+    "curledAspect": 2.7,
+    "gapFrontal": 0.32,
+    "gapRotated": 0.38,
     "worldTouchCm": 2.5,
-    "relSlow": 0.55, "relFast": 0.70, "fastSpd": 800,
-    "emaBar": 0.55, "sanityAspect": 6
+    "relSlow": 0.55,
+    "relFast": 0.7,
+    "fastSpd": 800,
+    "emaBar": 0.55,
+    "sanityAspect": 6
   },
-
-  "tap": { "_": "a tap = pinch released within ms, travelling under px", "ms": 300, "px": 26 },
-
-  "fling": { "_": "a throw = peak pinch speed over peak px/s with follow-through >= follow of peak at release (fitted: deliberate fling 1526, casual release <= 128, attempts 447-579 @ 1920x1044)", "peak": 1300, "follow": 0.4 },
-
-  "claw": { "_": "force pull: the open-flash -> claw window, and how long the lit target strains before the snap unlocks", "openWindowMs": 1500, "strainMs": 800 },
-
-  "clap": { "_": "THE STRIKE READ: two upright (handUp > up) open hands closing at >= closing px/s, then both vanish", "closing": 500, "up": 0.85 },
-
+  "tap": {
+    "_": "a tap = pinch released within ms, travelling under px",
+    "ms": 300,
+    "px": 26
+  },
+  "fling": {
+    "_": "a throw = peak pinch speed over peak px/s with follow-through >= follow of peak at release (fitted: deliberate fling 1526, casual release <= 128, attempts 447-579 @ 1920x1044)",
+    "peak": 1300,
+    "follow": 0.4
+  },
+  "claw": {
+    "_": "force pull: the open-flash -> claw window, and how long the lit target strains before the snap unlocks",
+    "openWindowMs": 1500,
+    "strainMs": 800
+  },
+  "clap": {
+    "_": "THE STRIKE READ: two upright (handUp > up) open hands closing at >= closing px/s, then both vanish",
+    "closing": 500,
+    "up": 0.85
+  },
   "light": {
     "_": "THE LIGHT GOVERNOR. floor = raw hand-zone luma below which FAST is too dark to lift (-> LIGHT after darkMs); back = return to FAST when est. FAST luma > floor*back for brightMs; target/gainMax = the software lift; toneMax = highest ISP tone rung allowed (clinic verdict: 1).",
-    "floor": 0.12, "back": 1.5, "target": 0.42, "gainMax": 3.5, "toneMax": 1,
-    "darkMs": 3000, "brightMs": 5000
+    "floor": 0.12,
+    "back": 1.5,
+    "target": 0.42,
+    "gainMax": 3.5,
+    "toneMax": 1,
+    "darkMs": 3000,
+    "brightMs": 5000
   },
-
-  "tape": { "_": "THE TAPE: seconds of per-frame anatomy kept for `cmd dump`; raw = also keep the 21 raw landmarks + world gap per hand (what tools/replay.py replays)", "seconds": 180, "raw": true }
+  "tape": {
+    "_": "THE TAPE: seconds of per-frame anatomy kept for `cmd dump`; raw = also keep the 21 raw landmarks + world gap per hand (what tools/replay.py replays)",
+    "seconds": 180,
+    "raw": true
+  },
+  "owner": {
+    "_": "THE OWNER LOCK. enabled=false turns the whole thing off (?lock=0 on the URL does the same for one launch). matchDist = face-api descriptor distance under which a face IS the owner (same person typically < 0.5; fit it with the D overlay's score). graceMs = how long the board stays open after the owner's face drops. livenessMs = a blink or head move must be this recent (anti-photo). closeK = a second face counts as 'close' (guest candidate) within closeK x the owner's face width, centre to centre, enforced continuously. guestTimeoutMs = revoke an approved guest this long after they drift away / leave. handReach / spanMin / spanMax = hand-to-face assignment: wrist within handReach face widths of the face, hand span between spanMin..spanMax face widths. thumbsUpMs = hold a thumbs-up this long to approve. enrollMs = the first-boot auto-enroll window (one face, alone, attentive). geomTol = THE GEOMETRY GATE (Task 11): max mean relative difference between a face's iris-normalised bone-ratio vector and the enrolled one before it REJECTS an otherwise-matching descriptor (beard-proof; 0 disables the gate). driftMax = THE TEMPLATE DRIFT: a face this confidently-you (descriptor score under driftMax) is eligible to update the owner's stored descriptors. driftEveryMs = minimum gap between drift writes (0 disables drift). driftCap = the owner's vecs array never grows past this many descriptors. propTol = POSE-LINKED HANDS: how close a body's shoulderW/headW proportion must be to the owner's enrolled one to win a tied hand claim (tie-breaker only, never a rejection).",
+    "enabled": true,
+    "matchDist": 0.5,
+    "graceMs": 1500,
+    "livenessMs": 8000,
+    "closeK": 1.5,
+    "guestTimeoutMs": 10000,
+    "handReach": 3.0,
+    "spanMin": 0.35,
+    "spanMax": 2.5,
+    "thumbsUpMs": 1000,
+    "enrollMs": 3000,
+    "geomTol": 0.18,
+    "driftMax": 0.35,
+    "driftEveryMs": 600000,
+    "driftCap": 16,
+    "propTol": 0.25
+  },
+  "face": {
+    "_": "THE FACES (MediaPipe FaceLandmarker). everyNthFrame = run the face model every Nth video frame (the stage raises it to 2 by itself when hands+face inference exceeds the frame budget). idEveryMs = re-score each face's identity this often. graceMs = a vanished face stays listed this long. eyeOpenMin = eyes count as open above this (1 - max eyeBlink blendshape). blinkClose = eyes count as shut below this (a blink = shut then open within 600ms). moveDeg = head pose change that counts as motion. attYaw/attPitch = the attention cone in degrees.",
+    "everyNthFrame": 1,
+    "idEveryMs": 1500,
+    "graceMs": 300,
+    "eyeOpenMin": 0.4,
+    "blinkClose": 0.3,
+    "moveDeg": 6,
+    "attYaw": 30,
+    "attPitch": 25
+  },
+  "pose": {
+    "_": "POSE-LINKED HANDS (Task 11 Part C, MediaPipe PoseLandmarker). enabled=false (default) means the stage never even constructs the model \u2014 no download, no GPU cost; flip it on once the frame budget's been measured live. everyNthFrame = run the pose model every Nth video frame, starting point (the stage drops it to every 3rd itself under sustained frame-budget pressure, same hysteresis as THE FACES). wristTol = max normalized distance from a hand's wrist to a body's wrist for that body to claim the hand.",
+    "enabled": false,
+    "everyNthFrame": 2,
+    "wristTol": 0.12
+  },
+  "hands2": {
+    "_": "THE TWO-SIDED SEARCH: when a frame comes back with fewer than 2 hands and a face is tracked, re-detect on a crop beside the face so the missing hand fills the model's input instead of a few pixels of a downscaled full frame. sideW/sideH = the region's size in face widths/heights. conf = detection confidence for the crop pass (lower than the full-frame wall is safe: the crop excludes the busy background). dedupe = wrist distance below which a rescued hand is the same as a full-frame hand. maxPerFrame = how many rescue detects one frame may run. everyNthFrame = only attempt a rescue every Nth frame (1 = every frame).",
+    "enabled": true,
+    "sideW": 1.6,
+    "sideH": 2.4,
+    "conf": 0.5,
+    "dedupe": 0.08,
+    "maxPerFrame": 1,
+    "everyNthFrame": 1
+  },
+  "image3d": {
+    "_": "Every staged image becomes a 3D luminance relief in a three.js scene (rotatable, rim-lit, bloom-catching) instead of a flat glass card. depth = how far the brightest pixels push out, in units of the plane's half-height. seg = mesh subdivision per side (cost: seg^2 verts). alphaCut = texels with alpha below this are discarded (transparent PNGs keep their silhouette). rim = fresnel edge glow strength. flat = force the old flat card. rimTint 'image' makes the rim glow in the picture's own dominant colour (use 'teal' for the fixed hologram tint); bloom = glow strength (the bloom no longer boosts saturation \u2014 neon art was being glowed twice); exposure = tone-mapping exposure for image scenes. emissive = how strongly the picture lights itself (keeps blacks black instead of the relief reading as grey stone).",
+    "enabled": true,
+    "depth": 0.22,
+    "seg": 160,
+    "alphaCut": 0.35,
+    "rim": 0.55,
+    "flat": false,
+    "rimTint": "image",
+    "bloom": 0.45,
+    "exposure": 0.95,
+    "emissive": 0.92
+  }
 }

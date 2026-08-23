@@ -7,7 +7,7 @@ The `media/` folder is the **airlock**: the only place the board will ever stage
 - `media/misc/`: images. Stage as framed glass cards.
 - `media/fx/`: transparent props. Render NAKED (no frame, no chrome), a floating object. Transparent PNGs float; alpha WebM videos loop silently (a fireball you can throw).
 - `media/models/`: 3D models (.glb / .gltf). Render REAL: full textures, environment lighting.
-- `media/holo/`: the same model files, but anything in here renders as the **hologram**: a translucent blue-glass wireframe with a scan beam. Same file, different folder, different reality.
+- `media/holo/`: the same model files, but anything in here renders as the **hologram**: a translucent teal ghost-glass volume, near-white and bloom-bright at its fresnel rim, with a scan beam. Same file, different folder, different reality.
 
 Drop a file in, press **R** (or tap the ring → Props), and it's on the shelf.
 

@@ -11,3 +11,4 @@ state/tape.json
 state/errors.log
 state/board.json
 launcher.log
+state/owner.json

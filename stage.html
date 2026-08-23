@@ -182,9 +182,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
           border-bottom:1px solid rgba(111,229,214,0.12); font-size:18px; }
   .brow .bico { color:#8ff0e4; width:28px; text-align:center; flex:none;
                 font-size:20px; }
-  .brow.dir .btxt { color:#8ff0e4; font-weight:600; letter-spacing:0.02em; }
-  .brow.note .btxt, .brow.prop .btxt, .brow.widget .btxt { color:#ecfffa; }
-  .brow .btxt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .brow.dir .btxt, .brow.ws .btxt { color:#8ff0e4; font-weight:600; letter-spacing:0.02em; }
+  .brow.note .btxt, .brow.prop .btxt, .brow.widget .btxt,
+  .brow.file .btxt, .brow.up .btxt, .brow.win .btxt { color:#ecfffa; }
+  .brow .btxt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
+  .brow .bkind { flex:none; font:11px "SF Mono",Menlo,monospace; letter-spacing:0.06em;
+                 color:#8ff0e4; opacity:0.75; border:1px solid rgba(111,229,214,0.4);
+                 border-radius:4px; padding:2px 6px; }
+  /* THE DESKS (Task 17): a fat, dedicated tap target on a window row —
+     tapping it focuses instead of staging the row as a live card. */
+  .brow.win .bfocus { flex:none; font:11px "SF Mono",Menlo,monospace;
+                 letter-spacing:0.06em; text-transform:uppercase;
+                 color:#8ff0e4; opacity:0.9; border:1px solid rgba(111,229,214,0.5);
+                 border-radius:4px; padding:8px 12px; margin-left:8px; }
   /* THE TAP FLASH (2026-08-13, the mirror-doctrine softener): the row
      you tap pulses full-width on BOTH pages. Rows span the pane and
      vertical never mirrors, so the pulse sits directly under the
@@ -218,6 +228,22 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .panel .scroll { transition:none; font-size:14.5px; line-height:1.5; color:#dcf5ee; text-shadow:0 1px 3px rgba(3,18,16,0.55);
                    white-space:pre-wrap; font-family:-apple-system,sans-serif; }
   .panel .scroll b { color:#fff; } .panel .scroll .h { color:#8ff0e4; font-weight:700; }
+  .panel.textview .scroll { font-family:"SF Mono",Menlo,monospace; font-size:13px; }
+  .panel.pdfview .body { display:flex; align-items:center; justify-content:center; }
+  .panel.pdfview .scroll { display:flex; align-items:center; justify-content:center;
+                            overflow:auto; white-space:normal; }
+  .panel.pdfview canvas { max-width:100%; max-height:100%; border-radius:6px;
+                          box-shadow:0 6px 30px rgba(0,0,0,0.4); }
+  .card.mediacard video, .card.mediacard audio { width:100%; border-radius:8px;
+                                                  display:block; margin-top:4px; }
+  /* THE DESKS (Task 17): a live i3 window, flat and crisp — the rim
+     treatment stays on the .panel FRAME only, never on the content
+     (no relief, no scan sweep — this is plain img markup, not a
+     three.js scene). */
+  .panel.desk { width:640px; height:460px; }
+  .panel.desk .body { display:flex; align-items:center; justify-content:center;
+                      padding:0; overflow:hidden; background:#04100e; }
+  .panel.desk .body img { display:block; max-width:100%; max-height:100%; }
   .cursor { position:absolute; width:28px; height:28px; margin:-14px 0 0 -14px;
             border-radius:50%; border:2.5px solid rgba(111,229,214,0.9);
             background:rgba(111,229,214,0.12); pointer-events:none; z-index:999; }
@@ -240,6 +266,47 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      fully removed 2026-08-13 — the line was killed 8/11 but its
      tracker half survived the baseline; Jared field-caught it.) */
   #behind { position:fixed; inset:0; z-index:1; perspective:1200px; }
+  /* THE OWNER LOCK: the glass frosts when the owner is away — nothing on
+     it can be read; the ring stays clear and says LOCKED. Disallowed
+     hands get no cursor at all. */
+  #behind { transition: filter .35s ease; }
+  body.locked #behind { filter: blur(18px) brightness(0.55) saturate(0.6); }
+  body.locked .cursor, .cursor.blocked { display:none; }
+  body.locked #hint { color:#ff9f9f; }
+  #facelayer { position:fixed; inset:0; z-index:3; pointer-events:none; }
+  .facehud { position:absolute; transition: left .12s linear, top .12s linear, width .12s linear, height .12s linear; }
+  .facehud.flash { animation: fhflash .4s ease-out; }
+  @keyframes fhflash { 0% { filter:brightness(2.2); transform:scale(1.08); } 100% { filter:brightness(1); transform:scale(1); } }
+  .fh-c { position:absolute; width:22%; height:22%; min-width:10px; min-height:10px; max-width:40px; max-height:40px;
+          border:0 solid var(--hud); filter:drop-shadow(0 0 4px var(--hud)); }
+  .fh-c.tl { top:0; left:0; border-top-width:2px; border-left-width:2px; }
+  .fh-c.tr { top:0; right:0; border-top-width:2px; border-right-width:2px; }
+  .fh-c.bl { bottom:0; left:0; border-bottom-width:2px; border-left-width:2px; }
+  .fh-c.br { bottom:0; right:0; border-bottom-width:2px; border-right-width:2px; }
+  .facehud.guest-away .fh-c, .facehud.unknown .fh-c { opacity:.55; filter:none; }
+  .facehud.stranger .fh-c { animation: fhpulse 1.4s ease-in-out infinite; }
+  @keyframes fhpulse { 0%, 100% { opacity:1; } 50% { opacity:.55; } }
+  .fh-scan { position:absolute; left:0; top:0; width:100%; height:1px; background:var(--hud); opacity:.35;
+             animation: fhscan 2.5s ease-in-out infinite alternate; }
+  @keyframes fhscan { from { top:0; } to { top:calc(100% - 1px); } }
+  .facehud.guest-away .fh-scan, .facehud.unknown .fh-scan { display:none; }
+  .fh-tag { position:absolute; top:0; font:11px/1.5 "SF Mono", Menlo, monospace; letter-spacing:.12em;
+            color:var(--hud); background:rgba(8,28,32,.62); backdrop-filter:blur(8px);
+            border:1px solid color-mix(in srgb, var(--hud) 55%, transparent); border-radius:8px;
+            padding:6px 9px; white-space:nowrap; }
+  .fh-tag.right { left:calc(100% + 8px); }
+  .fh-tag.left { right:calc(100% + 8px); }
+  .fh-tag b, .fh-tag i, .fh-tag u { display:block; font-style:normal; text-decoration:none; }
+  .fh-dot { display:inline-block; width:6px; height:6px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .guestchip { position:absolute; transform:translate(-50%, 8px); padding:8px 12px; border-radius:12px;
+               background:rgba(8,40,44,0.72); border:1px solid rgba(255,220,120,0.7); color:#ffe9a8;
+               font:600 12px/1.35 'SF Mono', Menlo, monospace; letter-spacing:.06em; white-space:nowrap;
+               backdrop-filter:blur(8px); pointer-events:none; }
+  .guestchip.guest { border-color:rgba(120,255,170,0.8); color:#c9ffe0; }
+  .guestchip.guest-away { border-color:rgba(200,200,200,0.5); color:#d8d8d8; }
+  .guestchip.stranger { border-color:rgba(255,90,90,0.8); color:#ffc1c1; }
+  .guestchip.hot { box-shadow:0 0 18px rgba(255,220,120,0.55); }
+  body.overlay #facelayer, body.keybg #facelayer { display:none; }
   /* (an earlier whole-screen voice-pulse border was removed —
      THE RING is the assistant's presence now.) */
   #boot { position:absolute; inset:0; display:flex; align-items:center;
@@ -289,6 +356,7 @@ setTimeout(function () {
 </script>
 <video id="cam" autoplay playsinline muted></video>
 <div id="behind"></div>
+<div id="facelayer"></div>
 <div id="boot">JARVIS<br><span style="color:#a8d8cf;font-size:13px">loading hand tracker… allow the camera when asked</span></div>
 <div id="hint">tap the RING = orbs · tap an orb = its tree · TAP a card = open · pinch-drag = move · hold still ~1s = 3D rotate · two hands = scale · TAP an open item = close · CLAP (palms together, fingers up) = ring center-stage · CLAW: flash open, then freeze thumb+pinky and half-hook the other three (C facing the camera), aim, let it strain ~1s, SNAP = force pull · empty pinch dragged sideways = explode scrub · R respawn / C camera / D debug</div>
 <div id="debug"></div>
@@ -316,8 +384,16 @@ addEventListener("unhandledrejection", e => { try { fetch("/dump", { method: "PO
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ err: "unhandled: " + String(e.reason && e.reason.message || e.reason),
                          stack: e.reason && e.reason.stack }) }); } catch (_) {} });
-import { HandLandmarker, FilesetResolver } from
+import { HandLandmarker, FaceLandmarker, PoseLandmarker, FilesetResolver } from
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+import { createIdentity } from "./js/identity.js";
+import { createFaces } from "./js/faces.js";
+import { createPose } from "./js/pose.js";
+import { decide, isLive, geomDist, driftAppend, needsGeomBackfill } from "./js/owner.js";
+import { sideRegions, mapLandmarks, coveredSides } from "./js/rescue.js";
+import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.min.mjs";
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.mjs";
 
 // ---- THE TUNING FILE. Every hand-fitted number the gates read lives in
 // tuning.json (GET /tuning) and lands here BEFORE any module code below
@@ -341,6 +417,17 @@ const TUNE_DEFAULTS = {
   light: { floor: 0.12, back: 1.5, target: 0.42, gainMax: 3.5, toneMax: 1,
            darkMs: 3000, brightMs: 5000 },
   tape: { seconds: 180, raw: true },
+  owner: { enabled: true, matchDist: 0.5, graceMs: 1500, livenessMs: 8000,
+           closeK: 1.5, guestTimeoutMs: 10000, handReach: 3.0,
+           spanMin: 0.35, spanMax: 2.5, thumbsUpMs: 1000, enrollMs: 3000,
+           geomTol: 0.18, driftMax: 0.35, driftEveryMs: 600000, driftCap: 16, propTol: 0.25 },
+  face: { everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4,
+          blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25 },
+  pose: { enabled: false, everyNthFrame: 2, wristTol: 0.12 },
+  hands2: { enabled: true, sideW: 1.6, sideH: 2.4, conf: 0.5, dedupe: 0.08,
+            maxPerFrame: 1, everyNthFrame: 1 },
+  image3d: { enabled: true, depth: 0.22, seg: 160, alphaCut: 0.35, rim: 0.55,
+             rimTint: "image", bloom: 0.45, exposure: 0.95, flat: false },
 };
 function tuneMerge(base, over) {
   const out = Array.isArray(base) ? base.slice() : { ...base };
@@ -361,6 +448,25 @@ const TUNE = await (async () => {
   } catch (_) { return tuneMerge(TUNE_DEFAULTS, {}); }
 })();
 window.TUNE = TUNE;
+// THE DEBUG HANDLE: one place to reach the live subsystems from the
+// console (or from an automated browser check) — read-only by intent,
+// but nothing stops a console from poking it, which is the point: this
+// is how the rescue/lock/identity paths get exercised without a person
+// physically standing in front of the camera.
+window.JARVIS = {};
+// real accessors, not Object.assign (which would copy each getter's value
+// at definition time — FACES/IDENT are built later, inside boot())
+for (const [k, get] of [["TUNE", () => TUNE], ["items", () => items],
+                        ["cursors", () => cursors], ["FACES", () => FACES],
+                        ["IDENT", () => IDENT], ["LOCK", () => LOCK],
+                        // THE DESKS (Task 17): DESKS is the last-loaded
+                        // /desks snapshot; deskStage/deskFocus are the
+                        // functions themselves (hoisted — defined further
+                        // down), so a browser check can exercise the
+                        // stream/switch paths with nobody at the camera.
+                        ["DESKS", () => DESKS], ["deskStage", () => stageDesk],
+                        ["deskFocus", () => deskFocus]])
+  Object.defineProperty(window.JARVIS, k, { get, enumerable: true });
 
 // modes: ?mode=mirror (default, self-view) | overlay (transparent — OBS
 // browser sources can't open cameras reliably on macOS, kept for browsers
@@ -369,6 +475,28 @@ window.TUNE = TUNE;
 // the key — keying green ate the cursor on the first OBS test, 2026-08-07).
 // ?cam=<label substring> picks the tracking camera; C cycles cameras live.
 const Q = new URLSearchParams(location.search);
+
+// ---- THE OWNER LOCK (2026-08-23): the board belongs to one face. IDENT
+// scores faces against state/owner.json, FACES tracks them beside the
+// hands, decide() (js/owner.js) rules every frame, and the stage obeys:
+// disallowed hands never reach a gesture, the glass frosts when the owner
+// is away. ?lock=0 = local override for debugging. No enrolled owner =
+// the lock is off and the first steady face alone in frame becomes the
+// owner (enrollMs), once, forever (delete state/owner.json to re-learn).
+const LOCK = {
+  enabled: TUNE.owner.enabled && Q.get("lock") !== "0",
+  override: Q.get("lock") === "0",
+  enrolled: false, owner: null,          // {vecs:[...]} from GET /owner
+  verdict: null, state: {}, approvals: {}, since: 0,
+  enroll: null,                          // the auto-enroll window {startT, vecs, yaws}
+  candidates: {},                        // face id -> chip element (Task 7)
+  driftT: 0, driftBusy: false,           // last template-drift write / write in flight (Task 11 Part B)
+  geomTried: false,                      // THE GEOMETRY BACKFILL tried once this page load (Task 14 #7)
+};
+// THE TWO-SIDED SEARCH (Task 15): ?hands2=0 = local override for one launch.
+const HANDS2_Q = Q.get("hands2") !== "0";
+let IDENT = null, FACES = null, POSE = null;
+
 // ?res=WxH — capture resolution (default 1920x1080, the tracking sweet
 // spot: MediaPipe downscales every frame to its model input anyway, so
 // higher res buys self-view sharpness, never accuracy — and costs fps
@@ -492,6 +620,28 @@ function makeImage(src, title) {
   // grab, stretch, fling, give-back, flash-close — works unchanged.
   const fx = /\/fx\//i.test(src);
   const vid = /\.webm(\?|$)/i.test(src);
+  // TASK 13 — IMAGES BECOME 3D: every still image (not .webm) becomes a
+  // luminance-relief three.js scene, exactly like a model — it routes
+  // through the SAME MSCENES tracking, render loop and render-page mirror
+  // as makeModel, so every existing 3D gesture (explode, force-pull,
+  // rotation) just works. ?img2d=1 is the debug escape hatch back to the
+  // flat glass card.
+  if (!vid && TUNE.image3d.enabled && !TUNE.image3d.flat && Q.get("img2d") !== "1") {
+    const el = document.createElement("div");
+    el.className = "card modelcard imgcard3d";
+    el.innerHTML = `<canvas></canvas>`;
+    BEHIND.appendChild(el);
+    const it = { el, id: UID++, type: "model",
+      def: { title: title || "", file: "", src, mmode: "img3d", lift: 0,
+             fx: fx ? 1 : 0 },
+      x: innerWidth * 0.5, y: innerHeight * 0.42, scale: 1,
+      rx: -0.05, ry: 0.35, rz: 0, rvy: 0, vx: 0, vy: 0,
+      grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
+    buildImageScene(el, src, { fx }).then(sc => {
+      if (sc) { sc.it = it; MSCENES.set(it.id, sc); }
+    });
+    return it;
+  }
   const el = document.createElement("div");
   el.className = "card imgcard" + (fx || vid ? " fxcard" : "");
   el.innerHTML = vid
@@ -503,6 +653,24 @@ function makeImage(src, title) {
   return { el, id: UID++, type: "img",
            def: { title: title || "", file: "", src,
                   fx: fx || vid ? 1 : 0, vid: vid ? 1 : 0 },
+           x: innerWidth * 0.5, y: innerHeight * 0.42, scale: 1, vx: 0, vy: 0,
+           grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
+}
+
+// THE FILES BROWSER (Task 16): a played-back video/audio file, native
+// controls and all. type "media" falls into physics()'s generic
+// move/hold-rotate bucket (same as "img"/"card" — nothing special-cased).
+function makeMedia(src, title, kind) {
+  const el = document.createElement("div");
+  el.className = "card mediacard";
+  el.innerHTML = `<h3>${escT(title)}</h3>` +
+    (kind === "audio"
+      ? `<audio src="${escT(src)}" controls preload="metadata"></audio>`
+      : `<video src="${escT(src)}" controls preload="metadata" playsinline></video>`);
+  BEHIND.appendChild(el);
+  return { el, id: UID++, type: "media",
+           def: { title: title || "", file: "", src,
+                  mkind: kind === "audio" ? "audio" : "video" },
            x: innerWidth * 0.5, y: innerHeight * 0.42, scale: 1, vx: 0, vy: 0,
            grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
 }
@@ -531,7 +699,8 @@ const RING = {
   // colors, SUBTLE state shifts — a deep-blue listening state was
   // unreadable and died)
   COLS: { idle: [140, 235, 240], listening: [120, 205, 250],
-          thinking: [170, 245, 250], speaking: [140, 235, 240] },
+          thinking: [170, 245, 250], speaking: [140, 235, 240],
+          locked: [255, 110, 110] },
   MOODT: { red: [255, 82, 82], amber: [255, 179, 71], green: null },
 };
 setInterval(async () => {
@@ -594,11 +763,19 @@ function ensureRingRes(sc) {
   sc.RES = want / 440;
 }
 
+// THE MIRRORED LOCK (render role): the render page never runs
+// decide() — LOCK.verdict is always null there — so drawRing() below
+// reads this instead. renderLoop() (the render page's only caller of
+// drawRing, via renderRings()) sets it from every /state heartbeat.
+let RLOCK = false;
+
 function drawRing(sc) {
   // NO spin — the ring is still; ONE solid thick band + solid hot
   // rim; SPEAKING = the band pulses HOT WHITE on the live voice.
   // Core is CLEAR glass, wordmark + status sized to fill it.
-  const d = RING.data, st = d.state || "idle";
+  const d = RING.data;
+  const locked = ROLE === "render" ? RLOCK : !!(LOCK.verdict && LOCK.verdict.locked && LOCK.enabled);
+  const st = locked ? "locked" : (d.state || "idle");
   const amp = st === "speaking" ? ringAmp() : (RING.amp *= 0.9);
   const t = Date.now() / 1000;          // wall clock: pages in sync
   const base = RING.COLS[st] || RING.COLS.idle;
@@ -686,7 +863,7 @@ function drawRing(sc) {
   x.fillStyle = col(0.98);
   x.font = "600 14px 'SF Mono', Menlo, monospace";
   const status = { idle: "ACTIVE", listening: "LISTENING",
-                   thinking: "THINKING", speaking: "SPEAKING" }[st];
+                   thinking: "THINKING", speaking: "SPEAKING", locked: "LOCKED" }[st];
   x.fillText((status || "ACTIVE").split("").join(" "), 0, 28);
   x.shadowBlur = 0; x.globalAlpha = 1;
   x.restore();
@@ -710,7 +887,7 @@ function renderRings() {
 // dynamic import on the FIRST model staged (the import map in <head>
 // resolves the bare specifiers), so the page still boots offline and
 // the render page only pays the cost if a model actually appears.
-// Modes: "holo" (hologram-blue emissive wireframe) and
+// Modes: "holo" (teal ghost-glass, fresnel rim) and
 // "solid" (real textures); a filename like ...-solid.glb forces solid,
 // a {"mode":"solid"} param on the command overrides either way.
 const MODEL_PX = 480;
@@ -1140,6 +1317,221 @@ async function buildModelScene(el, src, mm, lift) {
   }
 }
 
+// TASK 13 — IMAGES BECOME 3D: a luminance relief, the same scene-object
+// contract as buildModelScene (renderModels/renderLoop/applyExplode/
+// disposeScene read it identically — the fields only meaningful for glTF,
+// mixer/ghostMat/exParts, are set to safe no-op values). No ML, no
+// download: the image's own brightness pushes a subdivided plane toward
+// the viewer (bright = closer); alpha < alphaCut carves a hole in the
+// TRIANGLES (not just the height), so a transparent-PNG prop keeps its
+// true silhouette instead of staying a rectangle.
+async function buildImageScene(el, src, opts) {
+  const T0 = TUNE.image3d || {};
+  opts = opts || {};
+  const fx = !!opts.fx;
+  try {
+    const { THREE, RoomEnvironment } = await loadThree();
+    const canvas = el.querySelector("canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true,
+                                               antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    renderer.setSize(MODEL_PX, MODEL_PX, false);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = T0.exposure ?? 0.95;   // images read
+    // brighter than solid models: they are lit art, not physical objects
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+    camera.position.set(0, 0, 3.2);           // same 35° / distance as models
+
+    // THE RELIEF BUILD — once per image, never per frame: decode into an
+    // offscreen canvas capped at 512px on the long edge and read the
+    // pixels ONCE. Every later re-render (explode/force-pull/rotate) just
+    // redraws the already-built mesh, so the per-frame cost is identical
+    // to a model scene.
+    const img = await new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => res(im);
+      im.onerror = () => rej(new Error("image decode failed"));
+      im.src = src;
+    });
+    const iw = img.naturalWidth || img.width || 1,
+          ih = img.naturalHeight || img.height || 1;
+    const IMG_PX = 512;
+    const down = Math.min(1, IMG_PX / Math.max(iw, ih));
+    const cw = Math.max(1, Math.round(iw * down)),
+          ch = Math.max(1, Math.round(ih * down));
+    const off = document.createElement("canvas");
+    off.width = cw; off.height = ch;
+    const octx = off.getContext("2d");
+    octx.drawImage(img, 0, 0, cw, ch);
+    const idata = octx.getImageData(0, 0, cw, ch).data;
+
+    const T = TUNE.image3d || {};
+    const depth = T.depth ?? 0.22, seg = Math.max(1, T.seg || 160),
+          alphaCut = T.alphaCut ?? 0.35, rim = T.rim ?? 0.55,
+          rimTint = T.rimTint || "image", bloomK = T.bloom ?? 0.45;
+
+    // plane sized to the image's own aspect, long edge = 2 units (the
+    // model path's box-fit below scales it to fill the card the same way
+    // a model's bounding box does)
+    const longEdge = 2;
+    const w = iw >= ih ? longEdge : longEdge * iw / ih;
+    const h = iw >= ih ? longEdge * ih / iw : longEdge;
+    const geo = new THREE.PlaneGeometry(w, h, seg, seg);
+    const posAttr = geo.attributes.position, uvAttr = geo.attributes.uv;
+    const holes = new Uint8Array(posAttr.count);
+    // THE PICTURE'S OWN LIGHT: mean colour of the brighter, opaque
+    // texels — what the rim glows with when rimTint is "image", so a
+    // red photo rims red instead of everything rimming teal.
+    let tr = 0, tg = 0, tb = 0, tn = 0;
+    for (let i = 0; i < posAttr.count; i++) {
+      const u = uvAttr.getX(i), v = uvAttr.getY(i);
+      // CanvasTexture keeps three's default flipY, so v=0 is the BOTTOM
+      // of the source image — this must match that same flip or the
+      // relief and the painted texture disagree about which way is up.
+      const px = Math.min(cw - 1, Math.max(0, Math.round(u * (cw - 1))));
+      const py = Math.min(ch - 1, Math.max(0, Math.round((1 - v) * (ch - 1))));
+      const o = (py * cw + px) * 4;
+      const r = idata[o] / 255, g = idata[o + 1] / 255,
+            b = idata[o + 2] / 255, a = idata[o + 3] / 255;
+      if (a < alphaCut) {
+        holes[i] = 1;
+        posAttr.setZ(i, 0);      // a discarded texel never pushes geometry
+      } else {
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (a >= 0.5 && lum > 0.22) { tr += r; tg += g; tb += b; tn++; }
+        posAttr.setZ(i, lum * depth * (h / 2));
+      }
+    }
+    // carve the silhouette: a triangle survives only if none of its three
+    // vertices is a hole — setting z alone would keep the rectangle
+    const srcIdx = geo.index.array;
+    const keepIdx = [];
+    const kept = new Set();          // surviving vertex indices, for the box below
+    for (let i = 0; i < srcIdx.length; i += 3) {
+      const a = srcIdx[i], b = srcIdx[i + 1], c = srcIdx[i + 2];
+      if (holes[a] || holes[b] || holes[c]) continue;
+      keepIdx.push(a, b, c);
+      kept.add(a); kept.add(b); kept.add(c);
+    }
+    geo.setIndex(keepIdx);
+    posAttr.needsUpdate = true;
+    geo.computeVertexNormals();
+
+    const texture = new THREE.CanvasTexture(off);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+
+    // THE PICTURE IS LIT ART, NOT STONE (the neon round, take 2): with a
+    // plain lit material the image's BLACKS pick up environment light and
+    // the whole relief reads as grey plaster with a neon smear on top.
+    // The texture drives EMISSION as well as albedo, so black stays black,
+    // neon stays neon, and the key light only sculpts the relief's edges.
+    const mat = new THREE.MeshStandardMaterial({
+      map: texture, emissive: new THREE.Color(0xffffff), emissiveMap: texture,
+      emissiveIntensity: T.emissive ?? 0.92,
+      roughness: 0.62, metalness: 0.0,
+      transparent: fx, alphaTest: fx ? alphaCut : 0, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geo, mat);
+
+    // THE RIM — a second additive pass sharing the same geometry (safer
+    // than patching MeshStandardMaterial's internal shader chunks via
+    // onBeforeCompile across three.js versions): the exact fresnel formula
+    // and teal (0.75, 1.0, 0.96) the ghost-glass hologram shader uses, so
+    // an image rim-glows the same color a holo model does.
+    let rimCol = new THREE.Color(0.75, 1.0, 0.96);   // the holo teal
+    if (rimTint === "image" && tn > 0) {
+      // normalise to the brightest channel so the rim is a LIGHT of the
+      // picture's hue, never a dim smear of its average
+      const mr = tr / tn, mg = tg / tn, mb = tb / tn;
+      const mx = Math.max(mr, mg, mb, 1e-3);
+      rimCol = new THREE.Color(0.35 + 0.65 * mr / mx,
+                               0.35 + 0.65 * mg / mx,
+                               0.35 + 0.65 * mb / mx);
+    }
+    const rimMat = new THREE.ShaderMaterial({
+      uniforms: { cRim: { value: rimCol },
+                  rimPow: { value: 4.5 }, rimA: { value: rim } },
+      vertexShader: `
+        varying vec3 vN; varying vec3 vV;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vN = normalize(normalMatrix * normal);
+          vV = normalize(-mv.xyz);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        uniform vec3 cRim; uniform float rimPow; uniform float rimA;
+        varying vec3 vN; varying vec3 vV;
+        void main() {
+          float f = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), rimPow);
+          gl_FragColor = vec4(cRim, f * rimA);
+        }`,
+      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending });
+    // rimMesh intentionally shares `geo` with `mesh` — disposeScene's
+    // scene.traverse() will call geometry.dispose() on it twice when this
+    // scene tears down; three.js treats a repeat dispose as a no-op.
+    const rimMesh = new THREE.Mesh(geo, rimMat);
+    rimMesh.renderOrder = 1;
+
+    const group = new THREE.Group();
+    group.add(mesh); group.add(rimMesh);
+    scene.add(group);
+
+    // frame it exactly like the model path: measure, center, fit — but
+    // FROM THE CARVED SILHOUETTE ONLY. Box3.setFromObject(mesh) reads the
+    // raw position attribute directly and ignores the index buffer, so it
+    // would still size the fit from the full untrimmed rectangle (a real
+    // glTF model's box only ever reflects visible geometry).
+    const box = new THREE.Box3();
+    if (kept.size) {
+      const v = new THREE.Vector3();
+      for (const i of kept) box.expandByPoint(v.fromBufferAttribute(posAttr, i));
+    } else {
+      box.setFromObject(mesh);        // fully transparent image: fall back
+    }
+    const center = box.getCenter(new THREE.Vector3());
+    mesh.position.sub(center); rimMesh.position.sub(center);
+    const bsz = box.getSize(new THREE.Vector3());
+    const fit = 1.3 / (bsz.length() || 1);
+    group.scale.setScalar(fit);
+
+    // lit like a solid model: RoomEnvironment PMREM + ambient + one key
+    scene.environment = new THREE.PMREMGenerator(renderer)
+      .fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.add(new THREE.AmbientLight(0xffffff, 0.10));
+    const key = new THREE.DirectionalLight(0xffffff, 0.55);
+    key.position.set(2, 3, 4);
+    scene.add(key);
+    mat.envMapIntensity = 0.16;   // barely — emission carries the image
+
+    // reuse the model path's bloom rig so the rim catches real bloom
+    // NEON, HANDLED (the user: "handle neon better it looks wird rn"):
+    // neon source art was being glowed twice — a wide teal rim over it
+    // and a saturation-boosting bloom on top. The rim is tighter and
+    // wears the picture's own colour now; the bloom stops pushing
+    // saturation and just carries the light.
+    // FIX ROUND 1 (Important 3): a plain solid model only builds a bloom
+    // rig when it actually glows (holo, or a lift-detected material) —
+    // an image should pay the same ~7-pass blur/composite cost only when
+    // its rim will actually be visible, not unconditionally on every
+    // staged image (they pile up over a session).
+    const post = (bloomK > 0 && rim > 0)
+      ? buildBloomRig(THREE, renderer, { k: bloomK, sat: 1.0, spread: 1.6 })
+      : null;
+
+    return { renderer, scene, camera, group, canvas, mixer: null, post, THREE,
+             ghostMat: null, exParts: [], exSpread: 0, exC: 0,
+             bufSize: Math.round(MODEL_PX * Math.min(devicePixelRatio || 1, 2)) };
+  } catch (e) {
+    _three = null;                          // let a retry re-import
+    if (ROLE !== "render")
+      toast("3D image failed: " + (e.message || "load error"), 3000);
+    return null;
+  }
+}
+
 function disposeScene(sc) {
   try {
     if (sc.mixer) sc.mixer.stopAllAction();
@@ -1262,6 +1654,15 @@ function applyCmds(cmds) {
     } else if (c.a === "light") {         // ...and set the light governor
       const m = ["auto", "fast", "light"].includes(c.mode) ? c.mode : "auto";
       CAMGOV.setMode(m, !!c.persist);
+    } else if (c.a === "lock") {            // runtime override: {"on":0} opens the board, {"on":1} re-arms
+      LOCK.override = c.on === 0 || c.on === "0" || c.on === false;
+      toast(LOCK.override ? "owner lock OVERRIDDEN (cmd lock on:0)" : "owner lock armed", 2000);
+    } else if (c.a === "enroll") {          // forget the owner, re-arm the auto window
+      fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) })
+        .then(() => { LOCK.owner = null; LOCK.enrolled = false; LOCK.enroll = null; LOCK.state = {}; toast("owner forgotten — look at the camera alone for 3s to enroll", 4000); }).catch(() => {});
+    } else if (c.a === "guest") {           // {"allow":1} approves the current candidate(s), {"allow":0} revokes all
+      if (c.allow === 0 || c.allow === "0" || c.allow === false) { for (const id of Object.keys(LOCK.approvals)) revokeGuest(id); }
+      else if (LOCK.verdict) { for (const id of LOCK.verdict.guestCandidates) approveGuest(id, "cmd"); }
     } else if (c.a === "clear") {
       items.forEach(killItem);          // scorched earth — ring included
     } else if (c.a === "reset") {
@@ -1271,10 +1672,15 @@ function applyCmds(cmds) {
       loadTree().then(() => spawnStage(0.5, 0.42));
     } else if (c.a === "explode" || c.a === "assemble") {
       // THE EXPLODE verbs (2026-08-14): title-match first, else the
-      // freshest model on the board; assemble snaps the flight home
+      // freshest model on the board; assemble snaps the flight home.
+      // FIX ROUND 1 (Important 4): the FALLBACK (no title match) now
+      // requires k.exCap — the same gate the hand-scrub path already
+      // uses at :4018 — so an img3d image (exParts always [], exCap
+      // never set) can never silently absorb this and no-op; an
+      // explicit title match is untouched.
       let t = c.title ? findItem(c.title) : null;
       if (!t || t.type !== "model")
-        t = items.filter(k => k.type === "model" && k.el.isConnected).pop();
+        t = items.filter(k => k.type === "model" && k.exCap && k.el.isConnected).pop();
       if (t) { t.ex = c.a === "explode" ? 1 : 0; lastTouchedId = t.id; }
     } else if (c.a === "add_img" || c.a === "hand" || c.a === "give") {
       const it = isModelSrc(c.src) ? makeModel(c.src, c.title, c.mode, c.lift)
@@ -1283,6 +1689,11 @@ function applyCmds(cmds) {
       else if (c.a === "hand") deliver(it);
       else { it.anim = { k: "in", t: 0 }; it.el.style.opacity = "0.05"; }
       items.push(it);
+    } else if (c.a === "open_file" && c.rel != null) {
+      // THE FILES BROWSER, staged by the assistant: root/rel already
+      // jailed server-side — open it exactly like a user's tap would.
+      openFileByKind(c.root, c.rel, String(c.rel).split("/").pop(),
+                     FILE_EXT_KIND[extOf(c.rel)] || "other", null);
     } else if (c.a === "add_card" && c.title) {
       // the note-throw: add_card carries an optional notes `file` —
       // the delivered card flash-opens into the full note (the /note
@@ -1300,9 +1711,12 @@ function applyCmds(cmds) {
     } else if (c.a === "widget") {
       summonWidget(c.w || "ring");
     } else if (c.a === "scroll_note") {
-      // the assistant as teleprompter operator: glides the newest note
+      // the assistant as teleprompter operator: glides the newest note —
+      // or turns pages, for a PDF panel (same verb, same hooked input)
       const p = items.filter(k => k.type === "panel").pop();
-      if (p && p.body) {
+      if (p && p.def.ptype === "pdf") {
+        pdfGoPage(p, c.dir);
+      } else if (p && p.body) {
         const box = p.body.parentElement.clientHeight;
         const maxS = Math.max(0, p.body.offsetHeight - box + 40);
         p.sTarget = c.dir === "top" ? 0 : Math.min(maxS, Math.max(0,
@@ -1343,6 +1757,21 @@ function applyCmds(cmds) {
           presentItem(p || t);
         } else presentItem(t);
       }
+    } else if (c.a === "desk" && (c.xid != null || c.ws != null)) {
+      // THE DESKS, staged by the assistant (Task 17): xid/ws already
+      // validated server-side against the live i3 tree — a fresh /desks
+      // fetch (not the possibly-stale cached DESKS var) keeps class/
+      // title accurate, then stage it exactly like a user's row tap.
+      fetch("/desks").then(r => r.ok ? r.json() : null).then(d => {
+        if (!d) return;
+        if (c.xid != null) {
+          const w = (d.wins || []).find(x => x.xid === c.xid);
+          if (w) stageDesk(w.xid, w.cls + (w.title ? " · " + w.title : ""));
+        } else {
+          (d.wins || []).filter(x => x.ws === c.ws).forEach(w =>
+            stageDesk(w.xid, w.cls + (w.title ? " · " + w.title : "")));
+        }
+      }).catch(() => {});
     }
   });
 }
@@ -1389,11 +1818,26 @@ function makeOrb(def) {
 function ringToggle(ring) {
   const up = items.filter(i => i.type === "orb" && i.el.isConnected);
   if (up.length) { up.forEach(killItem); return; }
+  // fix round 2: the desks orb's count below reads the cached DESKS var,
+  // which can be stale (last touched whenever the pane was last opened).
+  // This bloom still shows whatever it has cached — a synchronous refetch
+  // here would delay every orb's bloom for one cosmetic number — but a
+  // fire-and-forget refresh means the NEXT bloom is accurate.
+  if ((CFG.orbs || []).some(o => o.kind === "desks")) loadDesks();
   const defs = (CFG.orbs || []).map((o, i) => {
     if (o.kind === "media") {
       const p = treeCounts(PROPSTREE, true);
       return { title: o.title || "Props",
                body: `${p.dirs} folders · ${p.leaves} props`, orb: "props" };
+    }
+    if (o.kind === "files") {
+      return { title: o.title || "Files", body: "browse", orb: "f" + o.root };
+    }
+    if (o.kind === "desks") {
+      const nw = DESKS ? (DESKS.wins || []).length : 0;
+      const nd = DESKS ? (DESKS.ws || []).length : 0;
+      return { title: o.title || "Desks",
+               body: `${nd} desks · ${nw} windows`, orb: "desks" };
     }
     const v = treeCounts(TREES[i], false);
     return { title: o.title || "Notes",
@@ -1417,7 +1861,7 @@ function ringToggle(ring) {
 }
 
 let CFG = { name: "Assistant", orbs: [] };
-let TREES = [], PROPSTREE = null;
+let TREES = [], PROPSTREE = null, DESKS = null;
 async function loadTree() {
   // jarvis.json drives everything: the ring's name and one orb per
   // configured folder (kind "notes" = a markdown tree, "media" = props)
@@ -1426,12 +1870,22 @@ async function loadTree() {
   TREES = [];
   for (let i = 0; i < (CFG.orbs || []).length; i++) {
     TREES[i] = null;
-    if (CFG.orbs[i].kind === "media") continue;
+    if (CFG.orbs[i].kind === "media" || CFG.orbs[i].kind === "files" ||
+        CFG.orbs[i].kind === "desks") continue;
     try { const r = await fetch("/tree?orb=" + i);
           if (r.ok) TREES[i] = await r.json(); }
     catch (e) {}
   }
   try { const r = await fetch("/props"); if (r.ok) PROPSTREE = await r.json(); }
+  catch (e) {}
+  if ((CFG.orbs || []).some(o => o.kind === "desks")) await loadDesks();
+}
+
+// THE DESKS (Task 17): live i3 workspaces + windows — fetched fresh
+// whenever the pane opens/refreshes; the orb's body count uses whatever
+// was last loaded (empty until the first loadTree()/openBrowser("desks")).
+async function loadDesks() {
+  try { const r = await fetch("/desks"); if (r.ok) DESKS = await r.json(); }
   catch (e) {}
 }
 
@@ -1466,6 +1920,37 @@ function escT(t) {
 
 function browserRows(b) {
   const out = [];
+  if (b.bkind === "desks") {
+    // THE DESKS (Task 17): workspaces expand like folders; a window row
+    // carries cid/xid/ws for browserTap (not in rowTuples — those travel
+    // to the render mirror for DISPLAY only, no gesture input there).
+    if (!DESKS) return out;
+    (DESKS.ws || []).forEach(w => {
+      const key = "ws" + w.num;
+      const open = b.expanded.has(key);
+      const label = (w.name || String(w.num)) +
+        (w.focused ? " · focused" : w.visible ? " · visible" : "");
+      out.push({ d: 0, t: label, k: "ws", o: open ? 1 : 0, key });
+      if (open) {
+        (DESKS.wins || []).filter(x => x.ws === w.num).forEach(win => {
+          out.push({ d: 1, t: win.cls + (win.title ? " · " + win.title : ""),
+                     k: "win", cid: win.cid, xid: win.xid, ws: win.ws });
+        });
+      }
+    });
+    return out;
+  }
+  if (b.froot != null) {
+    // THE FILES BROWSER: one directory level, lazily fetched as the
+    // user descends — NOT the notes/props whole-tree-upfront pattern
+    // (an arbitrary root can be enormous).
+    const d = b.fdir;
+    if (!d) return out;
+    if (d.up != null) out.push({ d: 0, t: "..", k: "up", rel: d.up });
+    d.dirs.forEach(sub => out.push({ d: 0, t: sub.name, k: "dir", rel: sub.rel }));
+    d.files.forEach(f => out.push({ d: 0, t: f.name, k: "file", kk: f.kind, rel: f.rel }));
+    return out;
+  }
   const walk = (d, path, depth, isProps) => {
     d.dirs.forEach(sub => {
       const key = path + "/" + sub.name;
@@ -1484,17 +1969,28 @@ function browserRows(b) {
   return out;
 }
 
+const FILE_KIND_TAG = { md: "MD", text: "TXT", code: "CODE", pdf: "PDF",
+  image: "IMG", video: "VID", audio: "AUD", model: "3D", archive: "ZIP",
+  other: "BIN" };
 function browserRowsHTML(tuples) {
-  const ICO = { dir0: "▸", dir1: "▾", note: "▤", prop: "▦", widget: "▣" };
-  return tuples.map(([d, t, k, o], i) =>
+  const ICO = { dir0: "▸", dir1: "▾", note: "▤", prop: "▦", widget: "▣",
+                file: "▤", up: "⬆", ws0: "▸", ws1: "▾", win: "▤" };
+  return tuples.map(([d, t, k, o, kk], i) =>
     `<div class="brow ${k}" data-i="${i}" style="padding-left:${18 + d * 26}px">` +
-    `<span class="bico">${k === "dir" ? ICO["dir" + o] : ICO[k]}</span>` +
-    `<span class="btxt">${escT(t)}</span></div>`).join("");
+    `<span class="bico">${k === "dir" ? ICO["dir" + o]
+                          : k === "ws" ? ICO["ws" + o] : ICO[k]}</span>` +
+    `<span class="btxt">${escT(t)}</span>` +
+    (kk ? `<span class="bkind">${FILE_KIND_TAG[kk] || "?"}</span>` : "") +
+    // THE DESKS (Task 17): a fat, dedicated tap target on window rows —
+    // tapping it focuses (and switches workspace if needed) instead of
+    // staging the row as a live card
+    (k === "win" ? `<span class="bfocus">focus</span>` : "") +
+    `</div>`).join("");
 }
 
 function browserRefresh(b) {
   b.rows = browserRows(b);
-  b.rowTuples = b.rows.map(r => [r.d, r.t, r.k, r.o || 0]);
+  b.rowTuples = b.rows.map(r => [r.d, r.t, r.k, r.o || 0, r.kk]);
   b.rowsV = (b.rowsV || 0) + 1;
   b.body.innerHTML = browserRowsHTML(b.rowTuples);
   const box = b.body.parentElement.clientHeight;
@@ -1503,12 +1999,68 @@ function browserRefresh(b) {
   b.body.style.transform = `translateY(${-b.scrollY}px)`;
 }
 
+async function loadFilesDir(b, rel) {
+  try {
+    const r = await fetch("/files?root=" + b.froot + "&rel=" + encodeURIComponent(rel || ""));
+    if (r.ok) b.fdir = await r.json();
+  } catch (e) {}
+  browserRefresh(b);
+}
+
 function openBrowser(kind, ox, oy) {
   // TOGGLE: tap the orb (or summon) again = the pane recedes. Phase 2:
   // an orb tap passes its position so the pane GROWS FROM the orb's
   // spot (clamped fully onscreen) — the circle language never breaks.
   const ex = items.find(i => i.type === "browser" && i.bkind === kind);
   if (ex) { killItem(ex); return; }
+  const fm = typeof kind === "string" && kind.match(/^f(\d+)$/);
+  if (fm) {
+    const froot = +fm[1];
+    const label = String(((CFG.orbs || []).find(o =>
+      o.kind === "files" && o.root === froot) || {}).title || "Files").toUpperCase();
+    const el = document.createElement("div");
+    el.className = "panel browser";
+    el.innerHTML = `<div class="bar"><h3>${escT(label)}</h3></div>` +
+                   `<div class="body"><div class="scroll"></div></div>`;
+    BEHIND.appendChild(el);
+    const b = { el, id: UID++, type: "browser", bkind: kind, froot,
+      def: { title: label, file: "" },
+      expanded: new Set(), rows: [], rowTuples: [], rowsV: 0, fdir: null,
+      x: ox != null ? Math.min(Math.max(ox, 300), innerWidth - 300)
+                    : innerWidth * 0.38,
+      y: oy != null ? Math.min(Math.max(oy, 380), innerHeight - 380)
+                    : innerHeight * 0.46,
+      scale: 1, vx: 0, vy: 0,
+      grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null,
+      scrollY: 0, body: el.querySelector(".scroll") };
+    b.anim = { k: "in", t: 0 }; b.el.style.opacity = "0.05";
+    items.push(b);
+    loadFilesDir(b, "");
+    return;
+  }
+  if (kind === "desks") {
+    const label = String(((CFG.orbs || []).find(o => o.kind === "desks") || {})
+      .title || "Desks").toUpperCase();
+    const el = document.createElement("div");
+    el.className = "panel browser";
+    el.innerHTML = `<div class="bar"><h3>${escT(label)}</h3></div>` +
+                   `<div class="body"><div class="scroll"></div></div>`;
+    BEHIND.appendChild(el);
+    const b = { el, id: UID++, type: "browser", bkind: "desks",
+      def: { title: label, file: "" },
+      expanded: new Set(), rows: [], rowTuples: [], rowsV: 0,
+      x: ox != null ? Math.min(Math.max(ox, 300), innerWidth - 300)
+                    : innerWidth * 0.38,
+      y: oy != null ? Math.min(Math.max(oy, 380), innerHeight - 380)
+                    : innerHeight * 0.46,
+      scale: 1, vx: 0, vy: 0,
+      grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null,
+      scrollY: 0, body: el.querySelector(".scroll") };
+    b.anim = { k: "in", t: 0 }; b.el.style.opacity = "0.05";
+    items.push(b);
+    loadDesks().then(() => browserRefresh(b));
+    return;
+  }
   loadTree().then(() => {
     const label = String(kind === "props" ? "Props"
       : ((CFG.orbs || [])[kind] || {}).title || "Notes").toUpperCase();
@@ -1556,9 +2108,33 @@ function browserTap(b, cur) {
       b.flashV = (b.flashV || 0) + 1;
       setTimeout(() => flashRow(b.body, b.flashI), 0);
       if (row.k === "dir") {
+        if (b.froot != null) {
+          loadFilesDir(b, row.rel);           // THE FILES BROWSER: descend
+        } else {
+          if (b.expanded.has(row.key)) b.expanded.delete(row.key);
+          else b.expanded.add(row.key);
+          browserRefresh(b);
+        }
+      } else if (row.k === "up") {
+        loadFilesDir(b, row.rel || "");
+      } else if (row.k === "ws") {
         if (b.expanded.has(row.key)) b.expanded.delete(row.key);
         else b.expanded.add(row.key);
         browserRefresh(b);
+      } else if (row.k === "win") {
+        // the small .bfocus tap target within the row focuses (never
+        // fires from anything but this same discriminated tap-release);
+        // anywhere else on the row stages it as a live card
+        const fEl = rowEl.querySelector(".bfocus");
+        const fr = fEl && fEl.getBoundingClientRect();
+        const onFocus = fr && cur.x >= fr.left && cur.x <= fr.right &&
+                        cur.y >= fr.top && cur.y <= fr.bottom;
+        if (onFocus) {
+          deskFocus(row.xid);
+        } else {
+          stageDesk(row.xid, row.t);
+          killItem(b);   // v3.3: any selection closes the pane
+        }
       } else if (row.k === "note") {
         openPanel({ def: { file: row.f, title: row.t } });
         killItem(b);   // v3.3 (his broadened rule): selecting ANYTHING
@@ -1571,10 +2147,197 @@ function browserTap(b, cur) {
         it.anim = { k: "in", t: 0 }; it.el.style.opacity = "0.05";
         items.push(it);
         killItem(b);   // v3.3: any selection closes the pane
+      } else if (row.k === "file") {
+        openFileByKind(b.froot, row.rel, row.t, row.kk, b);
+        killItem(b);   // v3.3: any selection closes the pane
       }
       return;
     }
   }
+}
+
+// ---- THE DESKS (Task 17): i3 workspaces/windows as live cards. A desk
+// card is its own item type — FLAT, crisp, glass-framed (reuses .panel's
+// frame/bar CSS exactly like the PDF panel does), no luminance relief,
+// no idle spin, no scan sweep: buildImageScene never runs for these, on
+// purpose — a live desktop rendered as an embossed 3D relief would be
+// unreadable. type "desk" (not "model") also keeps it out of the
+// explode/assemble fallback, which picks the freshest type:"model" item.
+// Falls into physics()'s generic move/hold-rotate/two-hand-scale bucket
+// like "img"/"media" — nothing to special-case there; only the BAR
+// (tap-close / double-tap-focus) needs its own beginGrab/endGrab branch.
+function stageDesk(xid, title) {
+  if (xid == null) return;
+  const already = items.find(i => i.type === "desk" && i.def.xid === xid &&
+                                  i.el.isConnected);
+  if (already) { already.anim = { k: "hover", t: 0 }; return already; }
+  const cap = CFG.desksMax || 3;
+  const live = items.filter(i => i.type === "desk" && i.el.isConnected);
+  if (live.length >= cap) {
+    // fix round 1: prefer replacing an UNPINNED card (the user hasn't
+    // touched it) — only fall back to a pinned one if every live desk
+    // is pinned, so a deliberately-arranged card is the last to go.
+    const unpinned = live.filter(i => !i.pinned);
+    const pool = unpinned.length ? unpinned : live;
+    const oldest = pool.sort((a, b) => a.id - b.id)[0];
+    killItem(oldest);
+    toast(`desk cap reached (${cap}) — replaced the oldest live desktop`, 2600);
+  }
+  const el = document.createElement("div");
+  el.className = "panel desk";
+  el.innerHTML = `<div class="bar"><h3>${escT(title || "DESKTOP")}</h3></div>` +
+                 `<div class="body"><img alt=""></div>`;
+  BEHIND.appendChild(el);
+  const it = { el, id: UID++, type: "desk", pinned: false,
+    def: { title: title || "", file: "", xid, src: "/desks/stream?xid=" + xid },
+    x: innerWidth * 0.5, y: innerHeight * 0.42, scale: 1, vx: 0, vy: 0,
+    grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
+  it.el.style.opacity = "0.05";
+  // fix round 1, item 3: a stream can fail to START (the maxStreams cap
+  // was already at its ceiling from an EARLIER staged card the eviction
+  // above didn't reach yet, or a transient maim failure) and an <img>
+  // gives no visible signal when that happens — it just never paints.
+  // Retry with backoff a few times, then say so instead of staying
+  // silently blank forever.
+  const img = el.querySelector("img");
+  let deskRetries = 0;
+  img.onerror = () => {
+    if (!img.isConnected) return;
+    if (deskRetries++ >= 4) {
+      toast("this live desktop's stream keeps failing (maxStreams cap, or the window's gone) — tap it again", 3400);
+      return;
+    }
+    setTimeout(() => { if (img.isConnected) img.src = it.def.src + "&r=" + Date.now(); },
+               400 * deskRetries);
+  };
+  img.src = it.def.src;
+  items.push(it);
+  retileDesks();
+  return it;
+}
+
+// THE DESKS (fix round 1): the user's headline ask was "see multiple
+// desktops at once" — before this, every staged desk landed at the same
+// default centre and stacked unreadably. Every UNPINNED live desk card
+// (not currently fading out or departing a fling) is arranged on a
+// simple grid, centred as a group, gliding to its slot (the "tile" anim
+// in physics()) rather than snapping. A card the user has ACTUALLY
+// DRAGGED (endGrab — a tap never counts) is pinned and left where they
+// put it, unless the drop lands close enough to where it would have
+// landed in the grid anyway (desksHypotheticalSlot) — see endGrab.
+function desksGridSlots(list) {
+  // the shared grid math: n items -> {it,x,y,s} slots, centred as a
+  // group. Used both for the REAL layout (retileDesks) and to answer
+  // "where would THIS ONE card land if it rejoined" (desksHypotheticalSlot)
+  // without duplicating the arithmetic.
+  const n = list.length;
+  if (!n) return [];
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const mx = 40, my = 40;
+  const cellW = (innerWidth - mx * (cols + 1)) / cols;
+  const cellH = (innerHeight - my * (rows + 1)) / rows;
+  const NATW = 640, NATH = 460;   // .panel.desk's natural (scale-1) size
+  const fit = Math.min(1.3, Math.max(0.35,
+    Math.min(cellW / NATW, cellH / NATH) * 0.92));
+  return list.map((it, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    return { it, x: mx + col * (cellW + mx) + cellW / 2,
+                 y: my + row * (cellH + my) + cellH / 2, s: fit };
+  });
+}
+
+function desksLiveUnpinned() {
+  return items.filter(i => i.type === "desk" && i.el.isConnected &&
+                           !i.pinned && !i._departing &&
+                           (!i.anim || i.anim.k !== "out"));
+}
+
+function retileDesks() {
+  desksGridSlots(desksLiveUnpinned()).forEach(({ it, x, y, s }) => {
+    const curOp = it.el.style.opacity === "" ? 1 : parseFloat(it.el.style.opacity);
+    it.anim = { k: "tile", t: 0, x0: it.x, y0: it.y, s0: it.scale,
+                x1: x, y1: y, s1: s, op0: isNaN(curOp) ? 1 : curOp };
+  });
+}
+
+// fix round 2: where would `c` land if it were part of the grid right
+// now? Used by endGrab to decide whether a drag that just ended should
+// REJOIN the grid (dropped close to this) instead of pinning.
+function desksHypotheticalSlot(c) {
+  const others = desksLiveUnpinned().filter(i => i !== c);
+  const slot = desksGridSlots([...others, c]).find(s => s.it === c);
+  return slot ? { x: slot.x, y: slot.y } : null;
+}
+
+// THE DESKS (fix round 2): the server ends a window's /desks/stream the
+// moment that window closes, but an <img> gets no error for a response
+// that just ends normally — it freezes on the last frame forever with no
+// signal. There's no "stream ended" event to hook, so this polls live
+// desk cards against a fresh /desks snapshot on an interval and closes
+// any whose window is gone. Tracker role only (started at the bottom of
+// this file, alongside boot()) — the render mirror has no items to own.
+async function desksHealthCheck() {
+  const live = items.filter(i => i.type === "desk" && i.el.isConnected);
+  if (!live.length) return;
+  let d;
+  try { const r = await fetch("/desks"); if (r.ok) d = await r.json(); }
+  catch (e) { return; }
+  if (!d) return;
+  const aliveXids = new Set((d.wins || []).map(w => w.xid));
+  let closedAny = false;
+  live.forEach(it => {
+    if (!aliveXids.has(it.def.xid)) {
+      toast(`"${it.def.title || "a live desktop"}" closed`, 2200);
+      killItem(it);
+      closedAny = true;
+    }
+  });
+  if (closedAny) retileDesks();
+}
+
+// The row's small focus affordance AND a live card's double-tapped bar
+// both funnel through here: re-validate against a FRESH /desks snapshot
+// (never the possibly-stale cached DESKS var), switch workspace first if
+// the window isn't currently visible, then focus. Never called from a
+// clap or a fling — only from the discriminated quick-tap-release gates
+// in browserTap and endGrab.
+async function deskFocus(xid) {
+  if (xid == null) return;
+  let d;
+  try { const r = await fetch("/desks"); if (r.ok) d = await r.json(); }
+  catch (e) {}
+  const win = d && (d.wins || []).find(w => w.xid === xid);
+  if (!win) { toast("that window is gone", 2000); return; }
+  try {
+    if (!win.visible) {
+      // fix round 4 (the reviewer's likeliest wedge-yourself path): a
+      // workspace switch takes the board's own window with it — the
+      // glass is nowhere on screen afterward and no gesture brings it
+      // back. Cheap fix, no extra round-trip: the /desks snapshot just
+      // fetched above already carries the CURRENTLY focused workspace —
+      // since the user is interacting with the board right now, that IS
+      // wherever the board's window actually is, captured BEFORE the
+      // switch below moves it.
+      const boardWs = (d.ws || []).find(w => w.focused);
+      const backTo = boardWs
+        ? (Number.isInteger(boardWs.num) && boardWs.num > 0 ? boardWs.num : boardWs.name)
+        : null;
+      const backHint = backTo != null
+        ? `press Super+${backTo} (or your i3 workspace key) to come back to the board`
+        : "use your i3 workspace key to come back to the board";
+      await fetch("/desks/cmd", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ a: "workspace", n: win.ws }) });
+      // longer + names the way back — the default toast length assumes
+      // you're still looking at the board when it appears, which is
+      // exactly what this toast can't assume
+      toast(`SWITCHED TO ws ${win.ws} — ${backHint}`, 6000);
+    }
+    await fetch("/desks/cmd", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: "focus", cid: win.cid }) });
+  } catch (e) {}
 }
 
 // minimal safe markdown-ish render: escape all HTML, then style headers/bold
@@ -1590,7 +2353,11 @@ async function openPanel(card) {
   if (items.some(i => i.type === "panel" && i.def === card.def)) return;
   let text = "(couldn't load the note)";
   try {
-    const r = await fetch("/note?f=" + encodeURIComponent(card.def.file));
+    // THE FILES BROWSER (Task 16): a files-root .md file carries its own
+    // fetch URL (fsrc) since /note is jailed to the configured NOTES
+    // orbs only — an ordinary note card never sets this, so it keeps
+    // fetching through /note exactly as before.
+    const r = await fetch(card.def.fsrc || ("/note?f=" + encodeURIComponent(card.def.file)));
     if (r.ok) text = await r.text();
   } catch (e) {}
   const el = document.createElement("div");
@@ -1603,6 +2370,176 @@ async function openPanel(card) {
               ox: 0, oy: 0, flying: false, stretch: null, scrollY: 0,
               body: el.querySelector(".scroll") };
   items.push(p);
+}
+
+// ---- THE FILES BROWSER (Task 16): browse anything, open anything.
+// One /files listing per directory (lazy, not the notes whole-tree walk),
+// typed rows, tap-to-open dispatch by server-reported kind.
+function fileURL(root, rel) {
+  return "/file?root=" + root + "&rel=" + encodeURIComponent(rel);
+}
+
+function extOf(rel) {
+  const base = String(rel || "").split("/").pop();
+  const i = base.lastIndexOf(".");
+  return i > 0 ? base.slice(i).toLowerCase() : "";
+}
+
+// mirrors server.py's _KIND_EXT — the AI's open_file command only carries
+// root/rel, not a kind, so the client classifies the same way the server
+// does (the server's classification is what actually governs /file).
+const FILE_EXT_KIND = (() => {
+  const map = {
+    md: [".md", ".markdown"],
+    text: [".txt", ".log", ".csv", ".tsv", ".json", ".yaml", ".yml", ".xml",
+           ".ini", ".cfg", ".conf", ".toml", ".env"],
+    code: [".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".c", ".h",
+           ".hpp", ".cpp", ".cc", ".rs", ".go", ".java", ".rb", ".sh",
+           ".bash", ".zsh", ".fish", ".css", ".scss", ".html", ".htm",
+           ".sql", ".php", ".swift", ".kt", ".lua", ".pl", ".r", ".m",
+           ".vue", ".svelte"],
+    pdf: [".pdf"],
+    image: [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".avif"],
+    video: [".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"],
+    audio: [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"],
+    model: [".glb", ".gltf"],
+    archive: [".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar"],
+  };
+  const out = {};
+  for (const k in map) for (const e of map[k]) out[e] = k;
+  return out;
+})();
+
+function stageNear(it, near) {
+  it.x = near ? Math.min(near.x + 480, innerWidth - 240) : innerWidth * 0.5;
+  it.y = near ? near.y : innerHeight * 0.42;
+  it.anim = { k: "in", t: 0 }; it.el.style.opacity = "0.05";
+  items.push(it);
+}
+
+function openFileByKind(root, rel, name, kind, near) {
+  const url = fileURL(root, rel);
+  if (kind === "md") {
+    openPanel({ def: { file: root + "/" + rel, title: name, fsrc: url } });
+  } else if (kind === "text" || kind === "code") {
+    openTextPanel(url, name);
+  } else if (kind === "pdf") {
+    openPdfPanel(root, rel, name);
+  } else if (kind === "image") {
+    stageNear(makeImage(url, name), near);
+  } else if (kind === "model") {
+    stageNear(makeModel(url, name), near);
+  } else if (kind === "video" || kind === "audio") {
+    stageNear(makeMedia(url, name, kind), near);
+  } else {
+    stageNear(makeCard({ title: name, body: "can't preview this file type" }), near);
+  }
+}
+
+const TEXT_CAP = 200 * 1024;
+function escPre(t) {
+  return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function textBody(t) {
+  return t.length > TEXT_CAP ? escPre(t.slice(0, TEXT_CAP)) + "\n…truncated"
+                              : escPre(t);
+}
+
+async function openTextPanel(url, name) {
+  let text = "(couldn't load the file)";
+  try { const r = await fetch(url); if (r.ok) text = await r.text(); } catch (e) {}
+  const el = document.createElement("div");
+  el.className = "panel textview";
+  el.innerHTML = `<div class="bar"><h3>${escT(name)}</h3></div>` +
+                 `<div class="body"><div class="scroll">${textBody(text)}</div></div>`;
+  BEHIND.appendChild(el);
+  const p = { el, id: UID++, type: "panel",
+              def: { file: name, fsrc: url, ptype: "text" },
+              x: innerWidth * 0.5, y: innerHeight * 0.44, scale: 1, vx: 0, vy: 0,
+              grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null,
+              scrollY: 0, body: el.querySelector(".scroll") };
+  items.push(p);
+  return p;
+}
+
+// ---- THE PDF PANEL: pdf.js renders page 1 to a canvas lazily, caching
+// the last 3 pages per document so paging back is instant. Page state
+// (page/pages) lives on the tracker item and travels through pushState
+// so the scroll_note command AND the hand-scroll gesture can turn pages
+// (see applyCmds' scroll_note branch and the held.mode==="scroll" drag
+// handler), and so the render page mirrors whichever page is showing.
+const PDFSTATE = new Map();   // item id -> { doc, cache: Map<page, canvas> }
+
+async function pdfEnsureDoc(id, root, rel) {
+  let st = PDFSTATE.get(id);
+  if (st) return st;
+  st = { doc: null, cache: new Map() };
+  PDFSTATE.set(id, st);
+  try { st.doc = await pdfjsLib.getDocument(fileURL(root, rel)).promise; }
+  catch (e) { st.err = true; }
+  return st;
+}
+
+async function pdfDrawPage(canvas, id, root, rel, page) {
+  const st = await pdfEnsureDoc(id, root, rel);
+  if (!st.doc) return null;
+  const pages = st.doc.numPages;
+  page = Math.max(1, Math.min(pages, page || 1));
+  let off = st.cache.get(page);
+  if (!off) {
+    const pg = await st.doc.getPage(page);
+    const vp0 = pg.getViewport({ scale: 1 });
+    const scale = 1000 / vp0.width;             // a sensible ~1000px width
+    const vp = pg.getViewport({ scale });
+    off = document.createElement("canvas");
+    off.width = Math.round(vp.width); off.height = Math.round(vp.height);
+    await pg.render({ canvasContext: off.getContext("2d"), viewport: vp }).promise;
+    st.cache.set(page, off);
+    if (st.cache.size > 3) {                    // cache the last 3 pages
+      for (const k of st.cache.keys()) { if (k !== page) { st.cache.delete(k); break; } }
+    }
+  }
+  canvas.width = off.width; canvas.height = off.height;
+  canvas.getContext("2d").drawImage(off, 0, 0);
+  return { page, pages };
+}
+
+function pdfCleanup(id) { PDFSTATE.delete(id); }
+
+async function openPdfPanel(root, rel, name) {
+  const el = document.createElement("div");
+  el.className = "panel pdfview";
+  el.innerHTML = `<div class="bar"><h3>${escT(name)}</h3></div>` +
+                 `<div class="body"><div class="scroll"><canvas></canvas></div></div>`;
+  BEHIND.appendChild(el);
+  const p = { el, id: UID++, type: "panel",
+              def: { root, rel, title: name, ptype: "pdf", file: root + "/" + rel },
+              x: innerWidth * 0.5, y: innerHeight * 0.44, scale: 1, vx: 0, vy: 0,
+              grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null,
+              scrollY: 0, body: el.querySelector(".scroll"), page: 1, pages: 0 };
+  items.push(p);
+  pdfShowPage(p, 1);
+  return p;
+}
+
+async function pdfShowPage(p, n) {
+  const canvas = p.el.querySelector("canvas");
+  if (!canvas) return;
+  const res = await pdfDrawPage(canvas, p.id, p.def.root, p.def.rel, n);
+  const h3 = p.el.querySelector(".bar h3");
+  if (res) {
+    p.page = res.page; p.pages = res.pages;
+    if (h3) h3.textContent = `${p.def.title} · ${p.page}/${p.pages}`;
+  } else if (h3) {
+    h3.textContent = p.def.title + " — couldn't load";
+  }
+}
+
+function pdfGoPage(p, dir) {
+  if (!p || p.def.ptype !== "pdf") return false;
+  const n = dir === "top" ? 1 : (p.page || 1) + (dir === "up" ? -1 : 1);
+  pdfShowPage(p, n);
+  return true;
 }
 
 function toast(msg, ms = 2500) {
@@ -2230,6 +3167,22 @@ function beginGrab(c, i, cur) {
       c.mode = "move";
       c.holdX = cur.x; c.holdY = cur.y; c.holdT = performance.now();
       c.tapX = cur.x; c.tapY = cur.y;   // ring-tap discrimination
+    } else if (c.type === "desk") {
+      // THE DESKS (Task 17): pinch-drag MOVE + hold-to-rotate like any
+      // card — no scroll mode, there's nothing to scroll on a live
+      // desktop. The BAR is still its own grab/tap zone (like panels/
+      // browsers) so endGrab's tap-close / double-tap-focus has a place
+      // to live without a second gesture to invent.
+      c.mode = "move";
+      c.holdX = cur.x; c.holdY = cur.y; c.holdT = performance.now();
+      c.tapX = cur.x; c.tapY = cur.y;
+      const barEl = c.el.querySelector(".bar");
+      const barR = barEl && barEl.getBoundingClientRect();
+      c.barGrab = !!(barR && cur.y >= barR.top && cur.y <= barR.bottom &&
+                    cur.x >= barR.left && cur.x <= barR.right);
+      // fix round 2: pinning is decided at RELEASE (endGrab), not here —
+      // a bar tap-to-close or double-tap-to-focus must never pin a card
+      // it's about to act on or that never actually moved.
     } else {
       // GLASS ERA: every movable item arms the hold-to-rotate timer
       c.mode = "move";
@@ -2281,6 +3234,51 @@ function endGrab(c, i, cur) {
                                cur.y - (c.tapY || cur.y));
       if (gMs < 350 && gTrav < 24) killItem(c);
       c.barGrab = false;
+    }
+    // THE DESKS (Task 17): the bar-tap idiom above, split by timing — a
+    // quick tap closes after a short grace window; a SECOND quick tap on
+    // the bar within that window cancels the close and focuses the
+    // window instead (workspace-switch-then-focus, via deskFocus). This
+    // whole block only runs on the same discriminated quick, near-still
+    // release every other bar-tap here uses — never a clap, never a fling.
+    if (c.type === "desk" && c.barGrab && !cur.probKill) {
+      const dMs = performance.now() - (cur.grabT || 0);
+      const dTrav = Math.hypot(cur.x - (c.tapX || cur.x),
+                               cur.y - (c.tapY || cur.y));
+      if (dMs < 350 && dTrav < 24) {
+        const tapNow = performance.now();
+        if (tapNow - (c._lastBarTap || 0) < 400) {
+          c._lastBarTap = 0;
+          deskFocus(c.def.xid);
+        } else {
+          c._lastBarTap = tapNow;
+          setTimeout(() => {
+            if (c._lastBarTap && performance.now() - c._lastBarTap >= 400 &&
+                c.el.isConnected) { killItem(c); retileDesks(); }
+          }, 420);
+        }
+      }
+      c.barGrab = false;
+    }
+    // THE DESKS (fix round 2): pinning fires on an ACTUAL DRAG only —
+    // mirrors the card tap-open discrimination just below (tTrav <
+    // TUNE.tap.px) — never on grab-start, so a tap or double-tap on the
+    // bar (handled above, its own tighter 350ms/24px gate) never pins.
+    // And pinning has a way back: dropping the card within ~70px of
+    // where it would land in the CURRENT grid rejoins it there instead
+    // of requiring a full close+re-stage — chosen over "only close+
+    // re-stage unpins" because that would leave an already-pinned card
+    // stuck until the user gives up its live stream entirely, worse UX
+    // for a feature whose whole point is seeing several at once.
+    if (c.type === "desk" && !cur.probKill) {
+      const rMs = performance.now() - (cur.grabT || 0);
+      const rTrav = Math.hypot(cur.x - (c.tapX || cur.x),
+                               cur.y - (c.tapY || cur.y));
+      if (!(rMs < TUNE.tap.ms && rTrav < TUNE.tap.px)) {
+        const slot = desksHypotheticalSlot(c);
+        c.pinned = !(slot && Math.hypot(c.x - slot.x, c.y - slot.y) < 70);
+        if (!c.pinned) retileDesks();
+      }
     }
     // GESTURE v3 (2026-08-14, Jared's spec — "make it a single pinch"):
     // THE TAP OPENS — a quick, near-still release on a file-card
@@ -2400,6 +3398,16 @@ function killItem(c) {
   c.grabbedBy = [];
   c.el.classList.remove("grabbed");
   c.flying = false;
+  if (c.type === "desk") {
+    // STREAM HYGIENE (Task 17): drop the <img> src NOW, not after the
+    // ~0.35s recede animation — the browser only ends the server-side
+    // MJPEG loop once the request itself is aborted. Clear onerror FIRST
+    // (fix round 1's retry handler) — an empty src can itself fire
+    // onerror in some browsers, which would otherwise reopen the very
+    // stream this is trying to end.
+    const img = c.el.querySelector("img");
+    if (img) { img.onerror = null; img.src = ""; }
+  }
   c.anim = { k: "out", t: 0 };
 }
 
@@ -2442,7 +3450,10 @@ function physics(dt) {
         const p = Math.min(a.t / 0.35, 1);
         c.inS = 1 - 0.7 * p * p;
         c.el.style.opacity = String(1 - p);
-        if (p >= 1) { c.el.remove(); c.anim = null; }
+        if (p >= 1) {
+          c.el.remove(); c.anim = null;
+          if (c.def && c.def.ptype === "pdf") pdfCleanup(c.id);
+        }
       } else if (a.k === "yank") {    // grip-fight shake, then ripped away
         if (a.t < 0.18) {
           c.jx = (Math.random() - 0.5) * 14; c.jy = (Math.random() - 0.5) * 14;
@@ -2464,6 +3475,19 @@ function physics(dt) {
         c.scale = a.s0 + (a.s1 - a.s0) * e;
         c.el.style.opacity = "";
         if (p >= 1) c.anim = null;    // the spotlight classes hold until endPresent
+      } else if (a.k === "tile") {    // THE DESKS (fix round 1): an eased
+        // glide to a new grid slot (retileDesks) — op0 is wherever this
+        // card's opacity actually was when the tile was assigned (0.05
+        // for a brand-new card mid-materialize, 1 for an already-settled
+        // one just being reflowed), so this never flickers an existing
+        // card and still finishes a new one's fade-in.
+        const p = Math.min(a.t / 0.4, 1);
+        const e = 1 - Math.pow(1 - p, 3);
+        c.x = a.x0 + (a.x1 - a.x0) * e;
+        c.y = a.y0 + (a.y1 - a.y0) * e;
+        c.scale = a.s0 + (a.s1 - a.s0) * e;
+        c.el.style.opacity = String(a.op0 + (1 - a.op0) * e);
+        if (p >= 1) { c.anim = null; c.el.style.opacity = ""; }
       } else if (a.k === "give") {    // bloom in, then hand off to the
         const p = Math.min(a.t / 0.3, 1);            // pull flight — the
         const e = 1 - Math.pow(1 - p, 3);            // delivered-INTO-
@@ -2521,6 +3545,14 @@ function physics(dt) {
           c.y < -600 || c.y > innerHeight + 600) {
         c.el.style.opacity = "0"; c.flying = false;
         if (c.type !== "panel") foley.void_();
+        if (c.type === "desk") {
+          // fix round 2: a flung desk left a hole in the grid — nothing
+          // on this removal path called retileDesks(). _departing keeps
+          // desksLiveUnpinned() from grid-placing (and un-fading) this
+          // one during the 300ms it takes to actually leave the DOM.
+          c._departing = true;
+          retileDesks();
+        }
         setTimeout(() => c.el.remove(), 300);
       }
     }
@@ -2531,7 +3563,19 @@ function physics(dt) {
       // idle pauses during the gimbal grip too — it was creeping the
       // yaw while Jared held a precise two-hand pose.)
       c.rvy = (c.rvy || 0) * Math.pow(0.15, dt);
-      c.ry = (c.ry || 0) + ((c.rvy || 0) + 0.12) * dt;
+      // A PICTURE FACES YOU (the neon round, take 3): the stately idle
+      // turn is right for a hologram of an OBJECT, but an image relief
+      // that keeps turning goes edge-on and unreadable — the single
+      // biggest reason the 3D images "looked weird". Image reliefs keep
+      // whatever spin the user gives them and add none of their own,
+      // and they ease back to facing the viewer when left alone.
+      const idleSpin = c.def && c.def.mmode === "img3d" ? 0 : 0.12;
+      c.ry = (c.ry || 0) + ((c.rvy || 0) + idleSpin) * dt;
+      if (!idleSpin && Math.abs(c.rvy || 0) < 0.05) {
+        const home = 0.0;                       // face-on
+        c.ry += (home - c.ry) * Math.min(1, 1.6 * dt);
+        c.rx += ((c.rxHome ?? -0.05) - (c.rx || 0)) * Math.min(1, 1.6 * dt);
+      }
     }
     c.el.style.setProperty("--ch", c.hch || 0);   // hover charge glow
     const w = c.el.offsetWidth, h = c.el.offsetHeight;
@@ -2588,8 +3632,126 @@ function makeLandmarker() {
     minTrackingConfidence: TUNE.detector.track });
 }
 
+// THE TWO-SIDED SEARCH (Task 15, "hard to detect right" — the user's right
+// hand loses first to a downscaled full frame). When a frame comes back
+// with fewer than 2 hands and a face is tracked, crop a region beside the
+// face (js/rescue.js: sideRegions) and re-detect on JUST that crop, so the
+// missing hand fills the model's input instead of a few backlit pixels of
+// the whole frame. Mapped back into full-frame coordinates and appended to
+// res.landmarks/handedness/worldLandmarks BEFORE HANDS.assign runs, so
+// identity/smoothing/every gesture downstream never knows the difference.
+//
+// A SEPARATE lazily-built HandLandmarker instance, not the shared one:
+// detectForVideo's VIDEO mode assumes a monotonically-increasing timestamp
+// over ONE continuous visual stream and (like the classic MediaPipe Hands
+// pipeline) leans on the previous call's result to skip re-running the
+// palm detector on a matching frame. Feeding the shared instance a crop of
+// a DIFFERENT image between two full-frame calls risks corrupting that
+// internal continuity — not necessarily a thrown error, so a clean console
+// wouldn't prove it's safe. A second `numHands: 1` instance sidesteps the
+// question entirely: its own clock, its own tracking state, never touches
+// the main landmarker's. Built on first actual rescue need, not at boot.
+const RESCUE2 = (() => {
+  const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+  const rc = document.createElement("canvas");
+  const rx = rc.getContext("2d", { alpha: false });
+  const S = { perf: { h2: { on: false, tries: 0, hits: 0, ms: 0 } },
+              every: 1, _slow: 0, _fast: 0, _n: 0, _side: "left",
+              _lm: null, _lmBusy: false };
+  function ensure() {           // lazy: only pay the model-load cost once it's needed
+    if (S._lm || S._lmBusy) return S._lm;
+    S._lmBusy = true;
+    HandLandmarker.createFromOptions(_vision, {
+      baseOptions: { modelAssetPath: MODEL, delegate: "GPU" },
+      numHands: 1, runningMode: "VIDEO",
+      minHandDetectionConfidence: TUNE.hands2.conf,
+      minHandPresenceConfidence: TUNE.hands2.conf,
+      minTrackingConfidence: TUNE.hands2.conf,
+    }).then(l => { S._lm = l; }).catch(() => { S._lmBusy = false; });
+    return null;
+  }
+  S.setEvery = (n) => { S.every = Math.max(1, n | 0); };
+  // res: this frame's main detect result (mutated in place). face: the
+  // tracked face to search beside, or null. src: the same detector input
+  // CAMGOV handed the main detect (raw video or the light-lifted copy).
+  S.tick = (res, face, src, now) => {
+    const T = TUNE.hands2;
+    S.perf.h2.on = !!(T.enabled && HANDS2_Q);
+    if (!S.perf.h2.on) return;
+    const lmsAll = res.landmarks || [];
+    if (lmsAll.length >= 2 || !face) return;   // nothing a rescue can help with — do nothing at all
+    S._n++;
+    if (S._n % S.every) return;                // everyNthFrame throttle (budget guard raises this)
+    const hands = lmsAll.map(l => ({ wx: l[0].x, wy: l[0].y }));
+    const cov = coveredSides(hands, face);
+    const order = [];
+    if (!cov.left && !cov.right) {              // both empty: alternate which side goes first
+      order.push(S._side, S._side === "left" ? "right" : "left");
+      S._side = S._side === "left" ? "right" : "left";
+    } else if (!cov.left) order.push("left");
+    else if (!cov.right) order.push("right");
+    if (!order.length) return;                  // both sides already covered
+    const regs = sideRegions(face, T);
+    const engine = ensure();
+    if (!engine) return;                        // model still loading — skip this frame
+    const W = src.videoWidth || src.width || 0, H = src.videoHeight || src.height || 0;
+    if (!W || !H) return;
+    let attempts = 0;
+    for (const want of order) {
+      if (attempts >= T.maxPerFrame) break;
+      const reg = regs[want];
+      if (!reg) continue;
+      const cw = Math.max(1, Math.round(reg.w * W)), ch = Math.max(1, Math.round(reg.h * H));
+      const scale = Math.min(1, 640 / Math.max(cw, ch));   // capped at 640 on the long edge
+      const pw = Math.max(1, Math.round(cw * scale)), ph = Math.max(1, Math.round(ch * scale));
+      if (rc.width !== pw || rc.height !== ph) { rc.width = pw; rc.height = ph; }
+      rx.drawImage(src, reg.x0 * W, reg.y0 * H, cw, ch, 0, 0, pw, ph);
+      attempts++; S.perf.h2.tries++;
+      const t0 = performance.now();
+      let out;
+      try { out = engine.detectForVideo(rc, now); } catch (e) { continue; }
+      const ms = performance.now() - t0;
+      S.perf.h2.ms = S.perf.h2.ms ? 0.9 * S.perf.h2.ms + 0.1 * ms : ms;
+      const lms = (out.landmarks || [])[0];
+      if (!lms) continue;
+      const mapped = mapLandmarks(lms, reg);
+      const wrist = mapped[0];
+      if (hands.some(h => Math.hypot(wrist.x - h.wx, wrist.y - h.wy) < T.dedupe)) continue;
+      const wl = (out.worldLandmarks || [])[0] || null;
+      const hdOut = (out.handedness || out.handednesses || [])[0] || null;
+      res.landmarks.push(mapped);
+      const hdArr = res.handedness || res.handednesses;
+      if (hdArr) hdArr.push(hdOut || [{ categoryName: want === "left" ? "Left" : "Right", score: 0 }]);
+      if (res.worldLandmarks) res.worldLandmarks.push(wl);
+      hands.push({ wx: wrist.x, wy: wrist.y });   // a hand we just rescued also blocks a duplicate on the other side
+      S.perf.h2.hits++;
+    }
+  };
+  return S;
+})();
+
 // THE BOARD FILE: the server persists what is on the glass (state/board.json);
 // after a reload the stage puts it back. ?fresh=1 boots empty.
+function isFileSrc(src) {
+  return typeof src === "string" && src.startsWith("/file?");
+}
+
+async function fileExists(url) {
+  // THE FILES BROWSER (Task 16 fix round 2): a soft existence probe — 1
+  // byte via Range, cheap regardless of file size since /file's range
+  // support is real — used only to decide whether a restored item should
+  // even be recreated. A deleted file or a changed root must fail SOFT
+  // (the item is just skipped, never a blank ghost panel/card).
+  // Fix round 3: /file answers a "bytes=0-0" probe against a genuinely
+  // EMPTY file with 416 (the range can't be satisfied), not 404 — a
+  // missing file always 404s, so 416 here can only mean "exists, empty",
+  // never "doesn't exist". Treat it as existing.
+  try {
+    const r = await fetch(url, { headers: { Range: "bytes=0-0" } });
+    return r.ok || r.status === 416;
+  } catch (e) { return false; }
+}
+
 async function restoreBoard() {
   let saved = null;
   try {
@@ -2604,12 +3766,48 @@ async function restoreBoard() {
       if (s.type === "card" && s.title) {
         it = makeCard({ title: s.title, body: s.body || "", file: s.file || "" });
       } else if (s.type === "img" && s.src) {
+        // THE FILES BROWSER (Task 16 fix round 3): a files-root image is
+        // still served from /file — soft-skip like every other files-root
+        // restore. Airlock-sourced images (/media/...) are unchanged.
+        if (isFileSrc(s.src) && !(await fileExists(s.src))) continue;
+        it = makeImage(s.src, s.title);
+      } else if (s.type === "model" && s.src && !isModelSrc(s.src)) {
+        // TASK 13 FIX (Critical 1): an img3d item is type:"model" on the
+        // wire (mm:"img3d") so every 3D gesture works, but it must still
+        // come back through makeImage on restore — makeModel would run
+        // GLTFLoader on a PNG/JPG/WEBP and silently fail. Routing on
+        // "the src isn't actually a model file" (rather than trusting
+        // s.mm survived) also rescues any record whose mm field is
+        // missing or stale.
+        // Task 16 fix round 3: this IS the files-root image case (a
+        // staged image always lands here, mm:"img3d", src a /file? URL)
+        // — same soft-skip as the plain img branch above.
+        if (isFileSrc(s.src) && !(await fileExists(s.src))) continue;
         it = makeImage(s.src, s.title);
       } else if (s.type === "model" && s.src) {
+        // THE FILES BROWSER (Task 16 fix round 2): a files-root
+        // .glb/.gltf is served from /file — soft-skip if it no longer
+        // resolves. Airlock-sourced models (/media/...) are unchanged.
+        if (isFileSrc(s.src) && !(await fileExists(s.src))) continue;
         it = makeModel(s.src, s.title, s.mm, s.lf);
         if (s.ex) it.ex = s.ex;
+      } else if (s.type === "media" && s.src) {
+        if (!(await fileExists(s.src))) continue;
+        it = makeMedia(s.src, s.title, s.mk);
+      } else if (s.type === "panel" && s.ptype === "pdf" &&
+                 s.proot != null && s.prel) {
+        if (!(await fileExists(fileURL(s.proot, s.prel)))) continue;
+        it = await openPdfPanel(s.proot, s.prel, s.title);
+      } else if (s.type === "panel" && s.ptype === "text" && s.fsrc) {
+        if (!(await fileExists(s.fsrc))) continue;
+        it = await openTextPanel(s.fsrc, s.title);
       } else if (s.type === "panel" && s.file) {
-        const carrier = makeCard({ title: s.title || "", body: "", file: s.file });
+        // a plain note reopens through /note (jailed to the notes orbs);
+        // a files-root markdown note carries fsrc and reopens through
+        // /file instead — openPanel already prefers fsrc when present
+        if (s.fsrc && !(await fileExists(s.fsrc))) continue;
+        const carrier = makeCard({ title: s.title || "", body: "",
+                                   file: s.file, fsrc: s.fsrc });
         carrier.el.remove();                 // the carrier card never shows
         await openPanel(carrier);            // pushes the panel itself
         it = items.find(k => k.type === "panel" && k.def === carrier.def) || null;
@@ -2625,6 +3823,223 @@ async function restoreBoard() {
     n++;
   }
   if (n) toast(`restored ${n} item${n > 1 ? "s" : ""} from the last session`, 2500);
+}
+
+// THE OWNER LOCK, applied: frost, hint, face rings, approvals bookkeeping.
+const FACELAYER = document.getElementById("facelayer");
+const FACERINGS = new Map();     // face id -> element
+const FACEHUD_COLOR = { owner:"#78ffaa", guest:"#6fe3d6", candidate:"#ffdc78",
+                        "guest-away":"#b9c6c4", unknown:"#b9c6c4", stranger:"#ff5a5a" };
+const FACEHUD_LABEL = { owner:"OWNER", guest:"GUEST", candidate:"GUEST?",
+                        "guest-away":"GUEST · AWAY", unknown:"SCANNING", stranger:"STRANGER" };
+// Task 14 #4: the status-dot colours, derived from FACEHUD_COLOR so a
+// palette edit can't miss one — a different signal (liveness) borrowing
+// the same three hues, not the role colours themselves
+const FACEHUD_DOT = { scanning: FACEHUD_COLOR.unknown, live: FACEHUD_COLOR.owner, noBlink: FACEHUD_COLOR.candidate };
+function applyVerdict(V, now) {
+  const wasLocked = LOCK.verdict ? LOCK.verdict.locked : null;
+  LOCK.verdict = V; LOCK.state = V.state;
+  if (V.locked !== wasLocked) {
+    LOCK.since = now;
+    document.body.classList.toggle("locked", !!V.locked && V.enabled);
+    if (V.enabled) toast(V.locked ? `LOCKED — ${V.why}` : "unlocked — welcome back", 1800);
+    for (const el of FACERINGS.values()) {
+      el.classList.add("flash");
+      setTimeout(() => el.classList.remove("flash"), 400);
+    }
+  }
+  for (const id of V.revoke) { delete LOCK.approvals[id]; }
+  const hint = document.getElementById("hint");
+  if (V.enabled && V.locked) hint.dataset.lock = `LOCKED — ${V.why}`;
+  else delete hint.dataset.lock;
+  // the self-view rings (tracker only; the render page never draws them)
+  const live = new Set();
+  for (const f of FACES.list()) {
+    if (!f.seenNow) continue;
+    live.add(f.id);
+    let el = FACERINGS.get(f.id);
+    if (!el) {
+      el = document.createElement("div"); el.className = "facehud";
+      el.innerHTML = '<div class="fh-c tl"></div><div class="fh-c tr"></div><div class="fh-c bl"></div><div class="fh-c br"></div>' +
+        '<div class="fh-scan"></div>' +
+        '<div class="fh-tag right"><b></b><i></i><u><span class="fh-dot"></span><span class="fh-status"></span></u></div>';
+      el._tag = el.querySelector(".fh-tag"); el._b = el.querySelector(".fh-tag b"); el._i = el.querySelector(".fh-tag i");
+      el._dot = el.querySelector(".fh-dot"); el._status = el.querySelector(".fh-status");
+      FACELAYER.appendChild(el); FACERINGS.set(f.id, el);
+    }
+    const role = V.faceRole[f.id] || "unknown";
+    el.className = "facehud " + role + (el.classList.contains("flash") ? " flash" : "");
+    el.style.setProperty("--hud", FACEHUD_COLOR[role] || FACEHUD_COLOR.unknown);
+    const a = toScreen({ x: f.box.x, y: f.box.y }), b = toScreen({ x: f.box.x + f.box.w, y: f.box.y + f.box.h });
+    const L = Math.min(a.x, b.x), R = Math.max(a.x, b.x);
+    const boxW = R - L, boxH = b.y - a.y;
+    el.style.left = L + "px"; el.style.top = a.y + "px"; el.style.width = boxW + "px"; el.style.height = boxH + "px";
+    // Task 14 #5: LOCK OFF (not SCANNING) when the lock isn't enabled —
+    // role stays "unknown" either way, so tell the two cases apart here.
+    const label = !V.enabled ? "LOCK OFF" : (FACEHUD_LABEL[role] || FACEHUD_LABEL.unknown);
+    const scoreTxt = Number.isFinite(f.score) ? f.score.toFixed(2) : "—";
+    const idTxt = `id ${f.id} · ${scoreTxt}`;
+    let dotColor, statusTxt;
+    if (!Number.isFinite(f.score)) { dotColor = FACEHUD_DOT.scanning; statusTxt = "SCANNING…"; }
+    else if (isLive(f, TUNE, now)) { dotColor = FACEHUD_DOT.live; statusTxt = "LIVE"; }
+    else { dotColor = FACEHUD_DOT.noBlink; statusTxt = "NO BLINK"; }
+    el._dot.style.background = dotColor;
+    // Task 14 #3: offsetWidth forces layout — only re-measure when the
+    // tag's own text actually changed, cache the width otherwise
+    const tagText = label + "\u0001" + idTxt + "\u0001" + statusTxt;
+    if (el._tagText !== tagText) {
+      el._tagText = tagText;
+      el._b.textContent = label; el._i.textContent = idTxt; el._status.textContent = statusTxt;
+      el._tagW = el._tag.offsetWidth || 140;
+    }
+    const tagW = el._tagW || 140;
+    el._tag.className = "fh-tag " + ((L + boxW + tagW > innerWidth - 8) ? "left" : "right");
+    // the guest chip: candidate = how to let them in; guest = tap to revoke
+    const wantChip = role === "candidate" || role === "guest" || role === "guest-away" || role === "stranger";
+    let chip = LOCK.candidates[f.id];
+    if (wantChip && !chip) { chip = document.createElement("div"); chip.className = "guestchip"; FACELAYER.appendChild(chip); LOCK.candidates[f.id] = chip; }
+    if (chip && !wantChip) { chip.remove(); delete LOCK.candidates[f.id]; chip = null; }
+    if (chip) {
+      chip.className = "guestchip " + role + (chip.dataset.hot === "1" ? " hot" : "");
+      chip.textContent = role === "candidate" ? "GUEST? — owner: tap this, or thumbs-up 1s"
+                       : role === "guest" ? "GUEST ✓ — tap to revoke"
+                       : role === "guest-away" ? "guest — come closer"
+                       : "not allowed";
+      chip.style.left = ((L + R) / 2) + "px"; chip.style.top = b.y + "px";
+      chip.dataset.face = f.id;
+    }
+  }
+  for (const [id, el] of FACERINGS) if (!live.has(id)) { el.remove(); FACERINGS.delete(id); }
+  for (const id of Object.keys(LOCK.candidates)) if (!live.has(+id)) { LOCK.candidates[id].remove(); delete LOCK.candidates[id]; }
+}
+function approveGuest(faceId, how) {
+  const ch = LOCK.candidates[faceId]; if (ch) ch.dataset.hot = "0";   // Task 14 #1: no stale glow after approval
+  LOCK.approvals[faceId] = { approvedT: performance.now(), how };
+  toast(`guest allowed (${how}) — they must stay close to you`, 2500);
+}
+function revokeGuest(faceId) { delete LOCK.approvals[faceId]; toast("guest revoked", 1500); }
+// THUMBS-UP: thumb tip well above the wrist and above the index knuckle,
+// the four fingers folded (arch ratio < 1.15), read like every other gate
+function isThumbsUp(lms, span) {
+  if (span <= 0) return false;
+  const W0 = lms[0];
+  const fR = (t, m) => { const td = Math.hypot(lms[t].x - W0.x, lms[t].y - W0.y), md = Math.hypot(lms[m].x - W0.x, lms[m].y - W0.y); return md > 0 ? td / md : 9; };
+  const folded = [[8, 5], [12, 9], [16, 13], [20, 17]].every(([t, m]) => fR(t, m) < 1.15);
+  const thumbUp = (W0.y - lms[4].y) / span > 0.6 && lms[4].y < lms[5].y;
+  return folded && thumbUp;
+}
+// the hint bar shows the lock reason while locked, its own text otherwise
+{
+  const hint = document.getElementById("hint");
+  hint.dataset.text = hint.textContent;
+  setInterval(() => { const want = hint.dataset.lock || hint.dataset.text; if (hint.textContent !== want) hint.textContent = want; }, 250);
+}
+// THE AUTO-ENROLL: no owner on file → the first face that is alone,
+// attentive, and steady for enrollMs becomes the owner. Collects a
+// descriptor spread across the window (head angles differ), posts it
+// once, never again. A second face in frame restarts the window.
+function medianGeom(rows) {          // THE GEOMETRY GATE: component-wise median of the
+  const ok = rows.filter(r => r);    // enrolment window's frontal geoms, or null if none frontal
+  if (!ok.length) return null;
+  const n = ok[0].length, out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const col = ok.map(r => r[i]).sort((a, b) => a - b);
+    const m = col.length >> 1;
+    out[i] = col.length % 2 ? col[m] : (col[m - 1] + col[m]) / 2;
+  }
+  return out;
+}
+async function enrollTick(now) {
+  if (LOCK.enrolled || !LOCK.enabled || !IDENT || !IDENT.isReady() || !FACES) return;
+  const fs = FACES.list().filter(f => f.seenNow);
+  if (fs.length !== 1 || !fs[0].attention) { LOCK.enroll = null; return; }
+  const f = fs[0];
+  if (!LOCK.enroll || LOCK.enroll.id !== f.id) { LOCK.enroll = { id: f.id, startT: now, vecs: [], yaws: [], geoms: [], props: [], lastT: 0, busy: false }; toast("enrolling you as the owner — look at the camera…", 1500); }
+  const E = LOCK.enroll;
+  if (E.busy || now - E.lastT < 350) return;
+  E.busy = true; E.lastT = now;
+  if (f.geomOk && f.geom) E.geoms.push(f.geom);    // sampled at the same cadence as the descriptor
+  if (POSE) {                                      // POSE-LINKED HANDS: the owner's body proportion,
+    let best = null, bd = Infinity;                 // when pose tracking happens to be running already
+    for (const b of POSE.list()) {
+      if (!b.seenNow || !b.nose) continue;
+      const d = Math.hypot(b.nose.x - f.cx, b.nose.y - f.cy);
+      if (d < 1.2 * Math.max(f.w, 1e-3) && d < bd) { bd = d; best = b; }
+    }
+    if (best && Number.isFinite(best.prop)) E.props.push(best.prop);
+  }
+  try {
+    // THE HANDS convention (Task 4 ruling): identity's pipeline is
+    // aligned-chip → faceRecognitionNet only; FACES.chip is the one
+    // aligner, so enrollment reuses it rather than cropping its own box.
+    const chipC = FACES.chip(f, cam);
+    if (!chipC) { E.busy = false; return; }
+    const vec = await IDENT.describe(chipC);
+    if (vec) { E.vecs.push(Array.from(vec)); E.yaws.push(f.yaw); }
+  } catch (_) { /* IDENT.describe may throw "busy" (the FACES scorer shares the engine) — try again next tick */ }
+  E.busy = false;
+  const spread = E.yaws.length ? Math.max(...E.yaws) - Math.min(...E.yaws) : 0;
+  if (now - E.startT >= TUNE.owner.enrollMs && E.vecs.length >= 6 && spread > 8) {
+    const vecs = E.vecs.slice(-12);
+    // Task 11 Part B: the owner file gains geom (median of this window's
+    // frontal frames) and seeds (how many of vecs are enrolment vecs —
+    // drift can append past them but never drop them). Task 11 Part C:
+    // prop (body proportion) rides along IF pose tracking happened to be
+    // running during enrolment — most owners enrol before the controller
+    // ever turns pose on, so this is commonly absent, which is fine: the
+    // pose tie-break is additive and a no-op without it.
+    const propMedian = E.props.length ? medianGeom(E.props.map(x => [x]))[0] : undefined;
+    const payload = { vecs, geom: medianGeom(E.geoms) || undefined, prop: propMedian, seeds: vecs.length, at: Date.now() };
+    try {
+      const r = await fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (r.ok) { LOCK.owner = payload; LOCK.enrolled = true; LOCK.enroll = null; toast("enrolled you as the owner — the board is yours", 4000); }
+    } catch (_) {}
+  } else if (now - E.startT >= TUNE.owner.enrollMs * 3 && spread <= 8) {
+    toast("turn your head a little left and right to finish enrolling", 1500); E.startT = now - TUNE.owner.enrollMs + 1500;
+  }
+}
+// TEMPLATE DRIFT (Task 11 Part B): beard trims, new glasses, hair — the
+// owner's descriptor set follows the wearer over time. Every condition
+// below must hold before a write; driftEveryMs: 0 disables it outright.
+// geom is carried forward unchanged (bone structure doesn't drift; only
+// the descriptor set does) — seeds falls back to the whole current vecs
+// set for an owner file enrolled before Task 11 (no seeds field on disk),
+// so an old real enrolment is never treated as droppable drift.
+async function driftTick(V, now) {
+  if (!LOCK.enrolled || !LOCK.owner || V.locked || !V.ownerId || !FACES || LOCK.driftBusy) return;
+  const T = TUNE.owner;
+  const f = FACES.list().find(x => x.id === V.ownerId);
+  // THE GEOMETRY BACKFILL (Task 14 #7, controller ruling): an owner
+  // enrolled before Task 11 has vecs but no geom, so geomOk() (js/owner.js)
+  // short-circuits to true forever and the shape gate never engages —
+  // re-enrolling is the only other way out, and the user shouldn't have
+  // to. Runs once ever (LOCK.geomTried), the first time the real owner is
+  // confidently, frontally seen after unlock — ahead of the drift cadence
+  // gate below, since this must not wait driftEveryMs (10 minutes).
+  if (!LOCK.geomTried && f && needsGeomBackfill(LOCK.owner, f, TUNE)) {
+    LOCK.geomTried = true;
+    LOCK.driftBusy = true;
+    try {
+      const seeds = Number.isInteger(LOCK.owner.seeds) ? LOCK.owner.seeds : LOCK.owner.vecs.length;
+      const payload = { vecs: LOCK.owner.vecs, geom: f.geom, prop: LOCK.owner.prop, seeds, at: Date.now() };
+      const r = await fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (r.ok) { LOCK.owner = payload; toast("owner geometry learned — the shape gate is live", 3000); }
+    } catch (_) {}
+    LOCK.driftBusy = false;
+    return;
+  }
+  if (!T.driftEveryMs || now - (LOCK.driftT || 0) < T.driftEveryMs) return;
+  if (!f || !f.seenNow || !f.geomOk || !f.attention) return;
+  if (!Number.isFinite(f.score) || f.score >= T.driftMax || !f.lastVec) return;
+  LOCK.driftBusy = true;
+  try {
+    const seeds = Number.isInteger(LOCK.owner.seeds) ? LOCK.owner.seeds : LOCK.owner.vecs.length;
+    const vecs = driftAppend(LOCK.owner.vecs, seeds, Array.from(f.lastVec), T.driftCap);
+    const payload = { vecs, geom: LOCK.owner.geom, prop: LOCK.owner.prop, seeds, at: Date.now() };
+    const r = await fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (r.ok) { LOCK.owner = payload; LOCK.driftT = now; toast("owner template updated (beard/lighting drift)", 2500); }
+  } catch (_) {}
+  LOCK.driftBusy = false;
 }
 
 async function boot() {
@@ -2643,6 +4058,36 @@ async function boot() {
   _vision = await FilesetResolver.forVisionTasks(
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
   landmarker = await makeLandmarker();
+  // THE OWNER LOCK boots beside the hands: the owner file, the identity
+  // engine (worker first), the face tracker. None of it blocks the board.
+  try {
+    const o = await (await fetch("/owner", { cache: "no-store" })).json();
+    if (o && Array.isArray(o.vecs) && o.vecs.length) { LOCK.owner = o; LOCK.enrolled = true; }
+  } catch (_) {}
+  // FAIL CLOSED AT BOOT: restoreBoard() below repaints the whole
+  // previous session — cards, notes, images — well before the first
+  // frame() tick ever runs decide()/applyVerdict(). Set the same frost
+  // class applyVerdict() would, using what's already known here: an
+  // enrolled owner with the lock enabled starts locked, exactly like
+  // decide()'s own boot default (st.locked defaults true) — no owner
+  // yet, or the lock disabled/overridden, starts open, since there is
+  // nothing for the lock to protect against. applyVerdict() takes over
+  // and clears this on the first unlocked verdict.
+  document.body.classList.toggle("locked", LOCK.enabled && LOCK.enrolled);
+  IDENT = createIdentity({});
+  FACES = createFaces({ FaceLandmarker, vision: _vision, identity: IDENT, tune: TUNE,
+                        owner: () => LOCK.owner });
+  IDENT.ready.then(ok => {
+    if (!ok) { toast("identity model failed to load — " + (IDENT.error || ""), 6000); return; }
+    if (!LOCK.enrolled && LOCK.enabled) toast("no owner enrolled yet — look at the camera, alone, for 3s", 5000);
+  });
+  FACES.ready.then(ok => { if (!ok) toast("face tracker failed: " + FACES.error, 6000); });
+  // POSE-LINKED HANDS (Task 11 Part C): ships enabled:false — the
+  // PoseLandmarker is only ever constructed (model download, GPU slot)
+  // when the tuning key says so; the controller flips it on after
+  // measuring the frame budget live.
+  POSE = TUNE.pose.enabled ? createPose({ PoseLandmarker, vision: _vision, tune: TUNE }) : null;
+  if (POSE) POSE.ready.then(ok => { if (!ok) toast("pose tracker failed: " + POSE.error, 6000); });
   // 2026-08-23 — THE DELEGATE WATCHDOG (this machine: GPU inference
   // benches 8–11ms in a bare page, but the stage's boot lands on a
   // silent CPU fallback at ~51ms → 10–17fps and every speed-based
@@ -2680,6 +4125,7 @@ async function boot() {
   if (Q.get("fresh") !== "1") await restoreBoard();
   toast("jarvis v2.0", 2000);  // build fingerprint
   let lastT = performance.now();
+  let poseSlow = 0, poseFast = 0;   // THE POSE's own budget hysteresis (Task 11 Part C)
 
   function frame(now) {
     const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
@@ -2693,11 +4139,72 @@ async function boot() {
       const res = landmarker.detectForVideo(_src, now);
       PERF.det = PERF.det ? 0.9 * PERF.det + 0.1 * (performance.now() - _t0)
                           : performance.now() - _t0;
+      if (FACES) {
+        FACES.tick(_src, cam, now);            // THE FACES, same frame
+        // the budget rule: hands + face over 24ms for a while → every 2nd
+        // frame; back to every frame under 16ms
+        // FACES.perf.face is a per-RUN EMA (skipped frames don't update
+        // it), so det+face compares the true un-amortized cost against
+        // the budget even at every=2
+        const tot = PERF.det + FACES.perf.face;
+        if (tot > 24 && FACES.perf.every === 1) { FACES._slow++; if (FACES._slow > 90) { FACES.setEvery(2); FACES._slow = 0; } }
+        else if (tot < 16 && FACES.perf.every > 1) { FACES._fast++; if (FACES._fast > 150) { FACES.setEvery(1); FACES._fast = 0; } }
+        else { FACES._slow = 0; FACES._fast = 0; }
+      }
+      if (POSE) {
+        POSE.tick(_src, now);              // THE POSE, same frame — half the face rate by default
+        const totP = PERF.det + (FACES ? FACES.perf.face : 0) + POSE.perf.pose;
+        if (totP > 24 && POSE.perf.every === 2) { poseSlow++; if (poseSlow > 90) { POSE.setEvery(3); poseSlow = 0; } }
+        else if (totP < 16 && POSE.perf.every > 2) { poseFast++; if (poseFast > 150) { POSE.setEvery(2); poseFast = 0; } }
+        else { poseSlow = 0; poseFast = 0; }
+      }
       CLINIC.tick(now, res);               // the camera clinic's recorder
+      // THE TWO-SIDED SEARCH (Task 15): a rescue crop-detect beside the
+      // face, only when it can help (fewer than 2 hands, a face tracked).
+      // Appends into res.landmarks/handedness/worldLandmarks BEFORE
+      // HANDS.assign so everything downstream reads it as a normal hand.
+      RESCUE2.tick(res, FACES ? FACES.list().find(f => f.seenNow) : null, _src, now);
+      if (RESCUE2.perf.h2.on) {
+        // same budget-guard shape as THE FACES: sustained overrun -> every
+        // 2nd frame; sustained headroom -> back to every frame
+        const totH2 = PERF.det + (FACES ? FACES.perf.face : 0) + RESCUE2.perf.h2.ms;
+        if (totH2 > 26 && RESCUE2.every === 1) { RESCUE2._slow++; if (RESCUE2._slow > 90) { RESCUE2.setEvery(2); RESCUE2._slow = 0; } }
+        else if (totH2 < 20 && RESCUE2.every > 1) { RESCUE2._fast++; if (RESCUE2._fast > 150) { RESCUE2.setEvery(1); RESCUE2._fast = 0; } }
+        else { RESCUE2._slow = 0; RESCUE2._fast = 0; }
+      }
       const seen = new Set();
       const ids = HANDS.assign(res, now);    // stable ids (THE HANDS)
+      // THE OWNER LOCK rules before any gesture reads a hand
+      enrollTick(now);
+      const handsIn = (res.landmarks || []).map((lms, mi) => ({
+        id: ids[mi], wx: lms[0].x, wy: lms[0].y,
+        span: Math.hypot(lms[0].x - lms[9].x, lms[0].y - lms[9].y) }));
+      const posesIn = POSE ? POSE.list() : [];
+      const V = decide({ now, enabled: LOCK.enabled, enrolled: LOCK.enrolled,
+                         identityReady: !!(IDENT && IDENT.isReady()), lockOverride: LOCK.override,
+                         faces: FACES ? FACES.list() : [], hands: handsIn, approvals: LOCK.approvals,
+                         owner: LOCK.owner, poses: posesIn },
+                       TUNE, LOCK.state);
+      applyVerdict(V, now);
+      driftTick(V, now);                    // THE TEMPLATE DRIFT (Task 11 Part B), fire-and-forget
       (res.landmarks || []).forEach((lmsRaw, mi) => {
         const i = ids[mi];
+        { // THE OWNER LOCK: a hand that is not the owner's or a guest's never
+          // reaches a gesture. Its cursor stays (so the id survives) but is
+          // hidden, releases whatever it held like a vanished hand (no tap,
+          // no fling), and reads un-pinched.
+          const role = V.handRole[i] || "owner";
+          const blocked = role !== "owner" && role !== "guest";
+          const curB = getCursor(i);
+          if (blocked !== !!curB.blocked) { curB.blocked = blocked; curB.el.classList.toggle("blocked", blocked); }
+          if (blocked) {
+            curB.seenT = now; curB.seenNow = false; curB.pinched = false;
+            items.forEach(c => { if (c.grabbedBy.includes(i)) { curB.lost = true; endGrab(c, i, curB); curB.lost = false; } });
+            curB.wN = { x: lmsRaw[0].x, y: lmsRaw[0].y };
+            return;
+          }
+          curB.role = role;
+        }
         const lms = HANDS.smooth(i, lmsRaw, now);
         if (mi === 0) CLINIC.tickSmooth(now, lms);
         seen.add(i);
@@ -2899,6 +4406,30 @@ async function boot() {
         } else cur.badRun = 0;
         if (cur.pinched) cur.lastPinchT = now;   // v3.9: clap disqualifier
         cur.el.classList.toggle("pinched", cur.pinched);
+        // ---- GUEST APPROVAL (owner's hand only): thumbs-up held, or a
+        // tap on a candidate's chip; a tap on a guest's chip revokes.
+        if (cur.role === "owner" && V.guestCandidates.length + Object.keys(LOCK.approvals).length) {
+          const tu = !cur.pinched && isThumbsUp(lms, span);
+          cur.tu = tu ? 1 : 0;
+          if (tu) { if (!cur.tuT) cur.tuT = now; }
+          else cur.tuT = 0;
+          const cands = V.guestCandidates;
+          for (const id of cands) { const ch = LOCK.candidates[id]; if (ch) ch.dataset.hot = tu ? "1" : "0"; }
+          if (tu && cur.tuT && now - cur.tuT >= TUNE.owner.thumbsUpMs && cands.length) {
+            approveGuest(cands[0], "thumbs-up"); cur.tuT = 0;
+          }
+          // chip tap: a quick pinch release with the cursor over a chip —
+          // same tap idiom as everything else in this file: time AND travel
+          const chipTrav = Math.hypot(cur.x - (cur.tapX ?? cur.x), cur.y - (cur.tapY ?? cur.y));
+          if (wasPinched && !cur.pinched && now - (cur.pinchT || 0) < TUNE.tap.ms && chipTrav < TUNE.tap.px) {
+            for (const [id, ch] of Object.entries(LOCK.candidates)) {
+              const r = ch.getBoundingClientRect();
+              if (cur.x > r.left - 20 && cur.x < r.right + 20 && cur.y > r.top - 20 && cur.y < r.bottom + 20) {
+                if (LOCK.approvals[id]) revokeGuest(id); else if (cands.includes(+id)) approveGuest(+id, "tap");
+              }
+            }
+          }
+        } else cur.tu = 0;
         cur.el.style.left = cur.x + "px"; cur.el.style.top = cur.y + "px";
 
         // ---- THE PALM ENGINE — a gesture set designed for imperfect,
@@ -2913,6 +4444,7 @@ async function boot() {
 
         if (cur.pinched && !wasPinched) {
           cur.pinchT = now;
+          cur.tapX = cur.x; cur.tapY = cur.y;   // Task 14 #2: chip tap travel bound (mirrors c.tapX/tapY)
           // v19.2 (Jared's confirm): the BIRTH-SPEED gate. Wave blur
           // enters a phantom pinch and the 0.34-in/0.50-out hysteresis
           // holds it for the whole sweep — long enough to beat any
@@ -3397,6 +4929,32 @@ async function boot() {
             // v3 (Jared's ruling 2026-08-14): the two-hand TWIST-ROLL is
             // dead — two hands = carry + SCALE only; all rotation lives
             // in the one-hand hold-still latch.
+          } else if (held.mode === "scroll" && held.grabbedBy[0] === i &&
+                     held.type === "panel" && held.def.ptype === "pdf") {
+            // THE FILES BROWSER (Task 16): the SAME drag that scrolls a
+            // note TURNS PAGES on a PDF panel — a threshold-crossing
+            // re-anchors instead of a continuous scrollY, everything
+            // else (the hold-to-move promotion) is untouched
+            const dy = cur.y - held.grabY0;
+            if (Math.abs(dy) > 90) {
+              pdfGoPage(held, dy < 0 ? "down" : "up");
+              held.grabY0 = cur.y;
+            }
+            const pdrift = Math.hypot(cur.x - held.holdX, cur.y - held.holdY);
+            if (pdrift > 80) {
+              held.holdX = cur.x; held.holdY = cur.y;
+              held.holdT = performance.now(); held.hch = 0;
+              held.grabY0 = cur.y;
+            } else {
+              const pp = Math.min((performance.now() - held.holdT) / 1000, 1);
+              held.hch = pp;
+              if (pp >= 1) {
+                held.mode = "move";
+                held.ox = held.x - cur.x; held.oy = held.y - cur.y;
+                held.holdX = cur.x; held.holdY = cur.y;
+                held.holdT = performance.now(); held.hch = 0.6;
+              }
+            }
           } else if (held.mode === "scroll" && held.grabbedBy[0] === i) {
             // scrolling (content follows the finger) + the hold-to-move
             // promotion timer running underneath
@@ -3485,6 +5043,8 @@ async function boot() {
                        x: +c.x.toFixed(0), y: +c.y.toFixed(0), ...(c.dbg || {}) };
           if (c.wcm === c.wcm) hr.w = +c.wcm.toFixed(1);      // world gap, cm
           if (c.touchLane) hr.tl = c.touchLane;                // which lane admitted
+          if (c.tu) hr.tu = 1;                                      // thumbs-up held this frame
+          if (c.role) hr.role = c.role;                                // owner/guest
           if (TUNE.tape.raw && c.lmRaw)                        // the 21 raw landmarks
             hr.lm = c.lmRaw.map(p => [+p.x.toFixed(4), +p.y.toFixed(4), +p.z.toFixed(4)]);
           row.h.push(hr);
@@ -3505,6 +5065,14 @@ async function boot() {
           `\nlight ${g.mode}/${g.state} tone ${g.tone}${g.have ? "" : " (no /cam)"} dyn ${h.exposure_dynamic_framerate ?? "?"}` +
           ` gamma ${h.gamma ?? "?"} luma g ${g.lumaG.toFixed(2)} h ${g.lumaH.toFixed(2)} (${g.zone}) gain ${g.gain.toFixed(2)}` +
           `\nhands ${res.landmarks.length}` +
+          `\nlock ${LOCK.verdict ? (LOCK.verdict.locked ? "LOCKED" : "open") + " · " + LOCK.verdict.why : "booting"}` +
+          ` ident ${IDENT ? IDENT.mode : "-"} face ${FACES ? FACES.perf.face.toFixed(1) : "-"}ms/${FACES ? FACES.perf.every : "-"} id ${FACES ? FACES.perf.id.toFixed(0) : "-"}ms` +
+          ` pose ${POSE ? POSE.perf.pose.toFixed(1) : "-"}ms/${POSE ? POSE.perf.every : "-"} bodies ${POSE ? POSE.list().filter(b => b.seenNow).length : "-"}` +
+          (RESCUE2.perf.h2.on ? `\nrescue L/R tries ${RESCUE2.perf.h2.tries} hits ${RESCUE2.perf.h2.hits} (${RESCUE2.perf.h2.ms.toFixed(1)}ms) every ${RESCUE2.every}` : "") +
+          (FACES ? FACES.list().filter(f => f.seenNow).map(f =>
+            `\n  face ${f.id} ${(LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "?"} score ${Number.isFinite(f.score) ? f.score.toFixed(3) : "-"}` +
+            ` eye ${f.eyeOpen.toFixed(2)} blink ${((performance.now() - f.blinkT) / 1000).toFixed(1)}s yaw ${f.yaw.toFixed(0)} pitch ${f.pitch.toFixed(0)} att ${f.attention ? 1 : 0} w ${f.w.toFixed(2)}` +
+            ` geom ${f.geomOk ? "frontal" : "-"} gdist ${(f.geom && LOCK.owner && LOCK.owner.geom) ? geomDist(f.geom, LOCK.owner.geom).toFixed(3) : "-"}`).join("") : "") +
           Object.keys(cursors).sort().map(k => `\n${cursors[k].dbgLine || ""}`).join("") +
           (SAMPLED ? `\n${SAMPLED}` : "");
       }
@@ -3678,10 +5246,23 @@ function pushState(now) {
   lastPush = now;
   const st = {
     ack: CMD_ACK,
-    perf: { det: +PERF.det.toFixed(1), loop: +PERF.loop.toFixed(1),
+    lock: { on: LOCK.verdict ? LOCK.verdict.locked : null, why: LOCK.verdict ? LOCK.verdict.why : "booting",
+            since: LOCK.since || 0, enrolled: LOCK.enrolled, ident: IDENT ? IDENT.mode : "none" },
+    faces: FACES ? FACES.list().filter(f => f.seenNow).map(f => ({
+      id: f.id, role: (LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "unknown",
+      x: +f.cx.toFixed(3), y: +f.cy.toFixed(3), w: +f.w.toFixed(3), h: +f.h.toFixed(3),
+      live: isLive(f, TUNE, performance.now()) ? 1 : 0,
+      att: f.attention ? 1 : 0, eye: +f.eyeOpen.toFixed(2),
+      score: Number.isFinite(f.score) ? +f.score.toFixed(3) : null,
+      geomOk: f.geomOk ? 1 : 0 })) : [],
+    perf: { det: +PERF.det.toFixed(1), face: FACES ? +FACES.perf.face.toFixed(1) : 0, faceEvery: FACES ? FACES.perf.every : 0, id: FACES ? +FACES.perf.id.toFixed(0) : 0, loop: +PERF.loop.toFixed(1),
             raf: +PERF.raf.toFixed(1), fps, log: window._mpLog || undefined,
             rearm: PERF.rearm || 0, rearmT: PERF.rearmT || 0, up: Math.round(performance.now() / 1000),
             clapN: PERF.clapN || 0, clapT: PERF.clapT || 0, clapHow: PERF.clapHow,
+            pose: POSE ? +POSE.perf.pose.toFixed(1) : 0, poseEvery: POSE ? POSE.perf.every : 0,
+            poseN: POSE ? POSE.list().filter(b => b.seenNow).length : 0,
+            h2: { on: RESCUE2.perf.h2.on, tries: RESCUE2.perf.h2.tries, hits: RESCUE2.perf.h2.hits,
+                  ms: +RESCUE2.perf.h2.ms.toFixed(2), every: RESCUE2.every },
             cam: CAMGOV.telemetry(), clinic: PERF.clinic || undefined },
     cursors: Object.keys(cursors).sort().filter(k => cursors[k].seenNow).map(k => {
       const c = cursors[k];
@@ -3708,7 +5289,10 @@ function pushState(now) {
         title: i.type === "panel"
                ? i.def.file.split("/").pop().replace(".md", "") : i.def.title,
         body: (i.type === "card" || i.type === "orb") ? i.def.body : undefined,
-        src: (i.type === "img" || i.type === "model") ? i.def.src : undefined,
+        src: (i.type === "img" || i.type === "model" || i.type === "media" ||
+              i.type === "desk") ? i.def.src : undefined,
+        mk: i.type === "media" ? i.def.mkind : undefined,
+        dxid: i.type === "desk" ? i.def.xid : undefined,
         w: i.type === "widget" ? i.def.w : undefined,
         mm: i.type === "model" ? i.def.mmode : undefined,
         lf: i.type === "model" ? i.def.lift : undefined,
@@ -3720,6 +5304,15 @@ function pushState(now) {
         rv: i.type === "browser" ? i.rowsV : undefined,
         fi: i.type === "browser" ? i.flashI : undefined,
         fv: i.type === "browser" ? i.flashV : undefined,
+        // THE FILES BROWSER's PDF panel (Task 16): ptype distinguishes a
+        // note/text/pdf panel; pg/pgs mirror the current page so the
+        // render page redraws only on an actual change (like rv/fv)
+        ptype: i.type === "panel" ? (i.def.ptype || "note") : undefined,
+        fsrc: i.type === "panel" ? i.def.fsrc : undefined,
+        proot: i.type === "panel" && i.def.ptype === "pdf" ? i.def.root : undefined,
+        prel: i.type === "panel" && i.def.ptype === "pdf" ? i.def.rel : undefined,
+        pg: i.type === "panel" && i.def.ptype === "pdf" ? i.page : undefined,
+        pgs: i.type === "panel" && i.def.ptype === "pdf" ? i.pages : undefined,
         fxf: i.def.fx ? 1 : undefined,
         vd: i.def.vid ? 1 : undefined,
         file: i.def.file,
@@ -3760,10 +5353,22 @@ const SHOW_CURSORS = Q.get("cursors") !== "0";
 // 2x the pixels at any stretch, the glass gradient renders finer too.
 const SS = ROLE === "render" ? (parseFloat(Q.get("ss")) || 1) : 1;
 
+// THE STALE HEARTBEAT (render role): perf.up is the TRACKER's own
+// uptime, written fresh only while its rAF loop is actually running —
+// unlike fetch success, which stays true forever (the server just
+// keeps replaying its last-known /state after the tracker page
+// closes). RHB_T is the wall-clock time we last saw it change; -Infinity
+// so a page that has never heard from the tracker starts locked, not open.
+let RHB_UP = -1, RHB_T = -Infinity;
+const RSTALE_MS = 3000;   // 3s with no fresh tracker heartbeat = fail closed
+
 const rItems = {}, rCursors = {};
 async function renderLoop() {
   try {
     const st = await (await fetch("/state", { cache: "no-store" })).json();
+    RLOCK = !!(st.lock && st.lock.on);
+    const up = st.perf && st.perf.up;
+    if (up !== RHB_UP) { RHB_UP = up; RHB_T = performance.now(); }
     const seen = new Set();
     (SHOW_CURSORS ? (st.cursors || []) : []).forEach((c, i) => {
       seen.add(i);
@@ -3794,9 +5399,12 @@ async function renderLoop() {
         let el;
         if (it.type === "model") {
           // Build 1: the render page runs its OWN three.js scene per
-          // hologram and lerps toward the tracker's rotation
+          // hologram and lerps toward the tracker's rotation. Task 13:
+          // mmode "img3d" is a staged image's luminance relief — same
+          // item type, same mirroring, so it needs no wiring beyond this.
           el = document.createElement("div");
-          el.className = "card modelcard" + (it.mm === "holo" ? " holo" : "");
+          el.className = "card modelcard" + (it.mm === "holo" ? " holo" : "") +
+                          (it.mm === "img3d" ? " imgcard3d" : "");
           el.innerHTML = `<canvas></canvas>`;
         } else if (it.type === "widget") {
           el = document.createElement("div");    // THE RING, self-animating
@@ -3823,25 +5431,62 @@ async function renderLoop() {
           el = document.createElement("div");
           el.className = "card";
           el.innerHTML = `<h3>${escT(it.title)}</h3><p>${escT(it.body || "")}</p>`;
+        } else if (it.type === "media") {
+          // THE FILES BROWSER (Task 16): a played-back video/audio file,
+          // controls and all — mirrored the same way an img card is.
+          el = document.createElement("div");
+          el.className = "card mediacard";
+          el.innerHTML = `<h3>${escT(it.title)}</h3>` +
+            (it.mk === "audio"
+              ? `<audio src="${escT(it.src)}" controls preload="metadata"></audio>`
+              : `<video src="${escT(it.src)}" controls preload="metadata" playsinline></video>`);
+        } else if (it.type === "desk") {
+          // THE DESKS (Task 17): the render mirror polls STILLS via
+          // /desks/shot instead of opening its own /desks/stream — the
+          // tracker page already holds one live MJPEG connection per
+          // staged card; a second one for the SAME card would silently
+          // double the pressure on desks.maxStreams for a single card
+          // the user staged once. A cached still every ~500ms is plenty
+          // for a broadcast overlay, and it hits the server's cheap
+          // per-xid capture cache instead of a second persistent loop.
+          el = document.createElement("div");
+          el.className = "panel desk";
+          el.innerHTML = `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
+                         `<div class="body"><img alt=""></div>`;
         } else {
           el = document.createElement("div");
-          el.className = "panel";
-          el.innerHTML =
-            `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
-            `<div class="body"><div class="scroll">loading…</div></div>`;
-          fetch("/note?f=" + encodeURIComponent(it.file))
-            .then(r => r.ok ? r.text() : "(unavailable)")
-            .then(t => { const s = el.querySelector(".scroll");
-                         if (s) s.innerHTML = renderNote(t); });
+          if (it.ptype === "pdf") {
+            el.className = "panel pdfview";
+            el.innerHTML = `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
+                           `<div class="body"><div class="scroll"><canvas></canvas></div></div>`;
+          } else {
+            el.className = "panel" + (it.ptype === "text" ? " textview" : "");
+            el.innerHTML =
+              `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
+              `<div class="body"><div class="scroll">loading…</div></div>`;
+            fetch(it.fsrc || ("/note?f=" + encodeURIComponent(it.file)))
+              .then(r => r.ok ? r.text() : "(unavailable)")
+              .then(t => { const s = el.querySelector(".scroll");
+                           if (s) s.innerHTML = it.ptype === "text" ? textBody(t) : renderNote(t); });
+          }
         }
         BEHIND.appendChild(el);
         ri = rItems[it.id] = { el, x: rx(it.x) * innerWidth,
                                y: it.y * innerHeight, s: it.scale || 1,
                                fv: it.fv };   // no flash replay on page load
         if (it.type === "model")
-          buildModelScene(el, it.src, it.mm, it.lf).then(sc => { ri.msc = sc; });
+          (it.mm === "img3d" ? buildImageScene(el, it.src, { fx: !!it.fxf })
+                              : buildModelScene(el, it.src, it.mm, it.lf))
+            .then(sc => { ri.msc = sc; });
         if (it.type === "widget" && it.w === "ring")
           RINGS.set(it.id, ringCanvas(el));   // the ring animates locally
+        if (it.ptype === "pdf") ri.pdfPage = 0;   // force the first draw below
+        if (it.type === "desk") {
+          const dimg = el.querySelector("img");
+          ri._deskT = setInterval(() => {
+            dimg.src = "/desks/shot?xid=" + it.dxid + "&t=" + Date.now();
+          }, 500);
+        }
       }
       ri.x += (rx(it.x) * innerWidth - ri.x) * 0.5;
       ri.y += (it.y * innerHeight - ri.y) * 0.5;
@@ -3870,6 +5515,14 @@ async function renderLoop() {
       if (it.type === "browser" && it.fv && it.fv !== ri.fv) {
         ri.fv = it.fv;                 // the tap flash, mirrored on air
         flashRow(ri.el.querySelector(".scroll"), it.fi);
+      }
+      if (it.ptype === "pdf" && it.pg && it.pg !== ri.pdfPage) {
+        ri.pdfPage = it.pg;
+        const canvas = ri.el.querySelector("canvas");
+        if (canvas) pdfDrawPage(canvas, it.id, it.proot, it.prel, it.pg).then(res => {
+          const h3 = ri.el.querySelector(".bar h3");
+          if (res && h3) h3.textContent = `${it.title} · ${res.page}/${res.pages}`;
+        });
       }
       if (it.type === "model" && ri.msc && ri.msc.group) {
         if (ri.mry == null) { ri.mrx = it.rx || 0; ri.mry = it.ry || 0;
@@ -3915,9 +5568,16 @@ async function renderLoop() {
     Object.keys(rItems).forEach(k => {
       if (!ids.has(+k)) {
         if (rItems[k].msc) disposeScene(rItems[k].msc);
+        if (rItems[k].pdfPage != null) pdfCleanup(+k);
+        if (rItems[k]._deskT) clearInterval(rItems[k]._deskT);
         rItems[k].el.remove(); delete rItems[k]; } });
     renderRings();               // the ring draws its own frames
   } catch (e) {}
+  // same visible consequence applyVerdict() gives the tracker page —
+  // #behind is the one DOM container both pages render items into, so
+  // the existing "body.locked #behind" frost rule already covers this
+  // page with no CSS change. Runs every frame, fetch-failure included.
+  document.body.classList.toggle("locked", RLOCK || (performance.now() - RHB_T > RSTALE_MS));
   requestAnimationFrame(renderLoop);
 }
 
@@ -3938,6 +5598,7 @@ if (ROLE === "render") {
     document.getElementById("boot").innerHTML =
       `STAGE FAILED TO BOOT<br><span style="color:#ff6666;font-size:13px">${e.message}</span>`;
   });
+  setInterval(desksHealthCheck, 4000);   // THE DESKS (fix round 2)
 }
 </script>
 </body>
