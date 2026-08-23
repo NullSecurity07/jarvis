@@ -2311,10 +2311,28 @@ async function deskFocus(xid) {
   if (!win) { toast("that window is gone", 2000); return; }
   try {
     if (!win.visible) {
+      // fix round 4 (the reviewer's likeliest wedge-yourself path): a
+      // workspace switch takes the board's own window with it — the
+      // glass is nowhere on screen afterward and no gesture brings it
+      // back. Cheap fix, no extra round-trip: the /desks snapshot just
+      // fetched above already carries the CURRENTLY focused workspace —
+      // since the user is interacting with the board right now, that IS
+      // wherever the board's window actually is, captured BEFORE the
+      // switch below moves it.
+      const boardWs = (d.ws || []).find(w => w.focused);
+      const backTo = boardWs
+        ? (Number.isInteger(boardWs.num) && boardWs.num > 0 ? boardWs.num : boardWs.name)
+        : null;
+      const backHint = backTo != null
+        ? `press Super+${backTo} (or your i3 workspace key) to come back to the board`
+        : "use your i3 workspace key to come back to the board";
       await fetch("/desks/cmd", { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ a: "workspace", n: win.ws }) });
-      toast("SWITCHED TO ws " + win.ws, 1800);
+      // longer + names the way back — the default toast length assumes
+      // you're still looking at the board when it appears, which is
+      // exactly what this toast can't assume
+      toast(`SWITCHED TO ws ${win.ws} — ${backHint}`, 6000);
     }
     await fetch("/desks/cmd", { method: "POST",
       headers: { "Content-Type": "application/json" },

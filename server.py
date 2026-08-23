@@ -83,8 +83,10 @@ on the glass:
              "aliveMs": 1500, "display": ":0",
              "xauthority": "/run/user/1000/lyxauth" }
 (absent key = disabled; every /desks* endpoint 404s). Read-only w.r.t.
-your windows except an allowlist of i3 commands the page can send
-(focus/workspace/move/layout/fullscreen — never kill); captures never
+your windows except an allowlist of i3 commands the page actually calls
+(focus/workspace/fullscreen — never kill, and move/layout aren't shipped
+either: nothing in the page calls them, and both act on state broader
+than "this one window" with no undo from the board); captures never
 leave localhost, and the board's own window is always excluded.
 
 Your AI drives the ring by writing tiny files into ./state/ :
@@ -1038,7 +1040,16 @@ class Handler(SimpleHTTPRequestHandler):
                 # allowlist (the if/elif chain below re-checks the same
                 # strings, which is why it was harmless in practice, but
                 # that's incidental, not the design).
-                if a not in ("workspace", "focus", "move", "layout", "fullscreen"):
+                # fix round 4: move and layout dropped — stage.html never
+                # calls either. move is the reviewer's leading suspect for
+                # a vanished workspace (an i3 workspace with no windows
+                # left on it ceases to exist), and layout acts on
+                # whatever's currently FOCUSED, not a named container —
+                # reachable via CSRF, with no undo from the board. Neither
+                # verb ships until something in the page actually needs
+                # it; kill sits in the same "not here" bucket for the
+                # same reason.
+                if a not in ("workspace", "focus", "fullscreen"):
                     raise ValueError("unknown action")
                 snap = _desks_snapshot()
                 if a == "workspace":
@@ -1052,21 +1063,6 @@ class Handler(SimpleHTTPRequestHandler):
                     if cid is None or not any(w["cid"] == cid for w in snap["wins"]):
                         raise ValueError("unknown cid")
                     _i3(f"[con_id={cid}]", "focus")
-                elif a == "move":
-                    cid = _desks_int(cmd.get("cid"))
-                    ws = cmd.get("ws")
-                    if cid is None or not any(w["cid"] == cid for w in snap["wins"]):
-                        raise ValueError("unknown cid")
-                    if not _desks_valid_ws_ref(ws, snap):
-                        raise ValueError("unknown workspace")
-                    dest = "number " + str(ws) if isinstance(ws, int) else str(ws)
-                    _i3(f"[con_id={cid}]", "move", "container", "to",
-                       "workspace", dest)
-                elif a == "layout":
-                    mode = cmd.get("mode")
-                    if mode not in ("split", "tabbed", "stacking", "toggle split"):
-                        raise ValueError("bad mode")
-                    _i3("layout", *mode.split(" "))
                 elif a == "fullscreen":
                     cid = _desks_int(cmd.get("cid"))
                     if cid is None or not any(w["cid"] == cid for w in snap["wins"]):
