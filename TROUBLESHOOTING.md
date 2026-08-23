@@ -73,6 +73,7 @@ The camera, not the code, sets the frame rate: a webcam's auto-exposure with *dy
 - **"identity model not loaded"**: first run needs internet for face-api (jsdelivr); `identity-probe.html` shows the load and which mode (worker/main) works. `?lock=0` opens the board meanwhile.
 - **A guest can't get in**: their face must be within `owner.closeK` × your face width (centre to centre) — really close. The chip appears only then; thumbs-up is thumb up, four fingers folded, held `owner.thumbsUpMs`.
 - **Photo test**: a still photo of you locks after `owner.livenessMs` (no blink, no head motion).
+- **The board stayed unlocked after I got up, and I can't explain why**: the identity check runs in a background Web Worker; if that worker dies while you're already matched (a crash, a tab throttled too hard, a bad frame), the board keeps trusting your LAST known match instead of re-checking — it doesn't fail open for a stranger walking up (a brand-new face still can't score, so it still locks against them), but it can stay open on you long after you've left. This is rare and the fix is always the same: **reload the page.** If it happens often, `D` will show whether identity's per-frame cost has crept up (worker crashes usually follow a spike there) — that's the thing to chase, not the lock logic itself.
 
 ## The hands: identity, grace, smoothing
 

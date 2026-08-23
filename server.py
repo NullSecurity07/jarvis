@@ -519,9 +519,15 @@ _BOARD_KEYS = ("type", "title", "body", "src", "mm", "lf", "ex", "rx", "ry",
 
 
 def _persist_board(body):
-    now = time.monotonic()
-    if now - _BOARD["t"] < 1.0:
-        return
+    # SECURITY/CORRECTNESS (fix round, 2026-08-24): _BOARD's mutation and
+    # the file write now both happen under _LOCK. Two concurrent
+    # POST /state (two tracker tabs, or a stray write racing the real
+    # one) used to interleave a non-atomic whole-file write.write_text —
+    # a truncated board.json makes restoreBoard()'s r.json() throw, the
+    # board silently comes back EMPTY with no error, and the user loses
+    # their whole session. The write itself is also now atomic (temp
+    # file + os.replace, same filesystem): a reader never sees a partial
+    # file, even mid-write, even if the process dies right after.
     try:
         items = json.loads(body).get("items") or []
     except Exception:
@@ -529,15 +535,19 @@ def _persist_board(body):
     keep = [{k: i.get(k) for k in _BOARD_KEYS if i.get(k) is not None}
             for i in items if i.get("type") in _BOARD_TYPES]
     sig = json.dumps(keep, sort_keys=True)
-    if sig == _BOARD["sig"]:
-        return
-    _BOARD["sig"] = sig
-    _BOARD["t"] = now
-    try:
-        BOARD_FILE.parent.mkdir(exist_ok=True)
-        BOARD_FILE.write_text(json.dumps({"at": time.time(), "items": keep}))
-    except Exception:
-        pass
+    with _LOCK:
+        now = time.monotonic()
+        if now - _BOARD["t"] < 1.0 or sig == _BOARD["sig"]:
+            return
+        _BOARD["sig"] = sig
+        _BOARD["t"] = now
+        try:
+            BOARD_FILE.parent.mkdir(exist_ok=True)
+            tmp = BOARD_FILE.with_name(BOARD_FILE.name + ".tmp")
+            tmp.write_text(json.dumps({"at": time.time(), "items": keep}))
+            os.replace(tmp, BOARD_FILE)
+        except Exception:
+            pass
 
 
 def _finite_row(v, n):
@@ -937,7 +947,11 @@ class Handler(SimpleHTTPRequestHandler):
                 self._json({"err": "owner: need 1-16 vectors of 128 numbers"}, 400)
                 return
             OWNER_FILE.parent.mkdir(exist_ok=True)
-            OWNER_FILE.write_text(json.dumps(clean))
+            # atomic write (fix round, 2026-08-24): rare, but losing this
+            # to a truncated write means the user re-enrolls from scratch
+            tmp = OWNER_FILE.with_name(OWNER_FILE.name + ".tmp")
+            tmp.write_text(json.dumps(clean))
+            os.replace(tmp, OWNER_FILE)
             self._json({"ok": True, "n": len(clean["vecs"])})
             return
         if path == "/cmd":
