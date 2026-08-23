@@ -3634,9 +3634,13 @@ async function fileExists(url) {
   // support is real — used only to decide whether a restored item should
   // even be recreated. A deleted file or a changed root must fail SOFT
   // (the item is just skipped, never a blank ghost panel/card).
+  // Fix round 3: /file answers a "bytes=0-0" probe against a genuinely
+  // EMPTY file with 416 (the range can't be satisfied), not 404 — a
+  // missing file always 404s, so 416 here can only mean "exists, empty",
+  // never "doesn't exist". Treat it as existing.
   try {
     const r = await fetch(url, { headers: { Range: "bytes=0-0" } });
-    return r.ok;
+    return r.ok || r.status === 416;
   } catch (e) { return false; }
 }
 
@@ -3654,6 +3658,10 @@ async function restoreBoard() {
       if (s.type === "card" && s.title) {
         it = makeCard({ title: s.title, body: s.body || "", file: s.file || "" });
       } else if (s.type === "img" && s.src) {
+        // THE FILES BROWSER (Task 16 fix round 3): a files-root image is
+        // still served from /file — soft-skip like every other files-root
+        // restore. Airlock-sourced images (/media/...) are unchanged.
+        if (isFileSrc(s.src) && !(await fileExists(s.src))) continue;
         it = makeImage(s.src, s.title);
       } else if (s.type === "model" && s.src && !isModelSrc(s.src)) {
         // TASK 13 FIX (Critical 1): an img3d item is type:"model" on the
@@ -3663,6 +3671,10 @@ async function restoreBoard() {
         // "the src isn't actually a model file" (rather than trusting
         // s.mm survived) also rescues any record whose mm field is
         // missing or stale.
+        // Task 16 fix round 3: this IS the files-root image case (a
+        // staged image always lands here, mm:"img3d", src a /file? URL)
+        // — same soft-skip as the plain img branch above.
+        if (isFileSrc(s.src) && !(await fileExists(s.src))) continue;
         it = makeImage(s.src, s.title);
       } else if (s.type === "model" && s.src) {
         // THE FILES BROWSER (Task 16 fix round 2): a files-root
