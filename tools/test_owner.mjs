@@ -1,7 +1,7 @@
 // tools/test_owner.mjs — run: node --test tools/test_owner.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decide, isLive, driftAppend, TUNE_OWNER_DEFAULTS, TUNE_FACE_DEFAULTS } from "../js/owner.js";
+import { decide, isLive, driftAppend, needsGeomBackfill, TUNE_OWNER_DEFAULTS, TUNE_FACE_DEFAULTS } from "../js/owner.js";
 
 const T = { owner: { ...TUNE_OWNER_DEFAULTS }, face: { ...TUNE_FACE_DEFAULTS } };
 const owner = (o = {}) => ({ id: 1, cx: 0.5, cy: 0.4, w: 0.2, score: 0.3, eyeOpen: 0.9, blinkT: 900, moveT: 900, ...o });
@@ -260,4 +260,31 @@ test("driftAppend: seeds are never dropped even after many drifts", () => {
   assert.deepEqual(vecs.slice(0, 3), ["s0", "s1", "s2"]);
   assert.equal(vecs.length, 6);
   assert.deepEqual(vecs.slice(3), ["d17", "d18", "d19"]);
+});
+
+// THE GEOMETRY BACKFILL (Task 14 #7): needsGeomBackfill(owner, face, tune)
+// is the pure "should the stage write geom back" check — an owner enrolled
+// before the geometry gate existed has vecs but no geom, which makes
+// geomOk() a permanent no-op for them. True only in the one good case.
+const geomFace = (o = {}) => ({ seenNow: true, geomOk: true, attention: true, score: 0.1, geom: GEOM, ...o });
+
+test("needsGeomBackfill: false when the owner already has geom", () => {
+  assert.equal(needsGeomBackfill({ geom: GEOM, vecs: [] }, geomFace(), T), false);
+});
+
+test("needsGeomBackfill: false when the face isn't frontal/confident", () => {
+  assert.equal(needsGeomBackfill({ vecs: [] }, geomFace({ geomOk: false }), T), false);
+  assert.equal(needsGeomBackfill({ vecs: [] }, geomFace({ attention: false }), T), false);
+  assert.equal(needsGeomBackfill({ vecs: [] }, geomFace({ seenNow: false }), T), false);
+  assert.equal(needsGeomBackfill({ vecs: [] }, geomFace({ score: T.owner.driftMax }), T), false);
+  assert.equal(needsGeomBackfill({ vecs: [] }, geomFace({ geom: null }), T), false);
+});
+
+test("needsGeomBackfill: false when geomTol is 0 (the gate is off by configuration)", () => {
+  const t = { owner: { ...TUNE_OWNER_DEFAULTS, geomTol: 0 }, face: { ...TUNE_FACE_DEFAULTS } };
+  assert.equal(needsGeomBackfill({ vecs: [] }, geomFace(), t), false);
+});
+
+test("needsGeomBackfill: true — owner has no geom, face is frontal, confident, geom-valid", () => {
+  assert.equal(needsGeomBackfill({ vecs: [] }, geomFace(), T), true);
 });

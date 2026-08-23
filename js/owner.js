@@ -68,6 +68,25 @@ export function driftAppend(vecs, seeds, vec, cap) {
   return out;
 }
 
+// THE GEOMETRY BACKFILL (Task 14 #7): an owner enrolled before the
+// geometry gate existed has vecs but no geom, which makes geomOk() a
+// permanent no-op for them (see its doc above) — re-enrolling is the only
+// other way out. This is the pure "should the stage write one back" check;
+// the stage decides WHEN it's looking at the owner's own, unlocked face
+// (see stage.html's driftTick) and does the POST — this never touches
+// the network, only judges the one frame it's handed.
+function validGeom(g) {
+  return Array.isArray(g) && g.length === 6 && g.every(Number.isFinite);
+}
+export function needsGeomBackfill(owner, face, tune) {
+  const T = { ...TUNE_OWNER_DEFAULTS, ...((tune && tune.owner) || {}) };
+  if (T.geomTol <= 0) return false;                    // the gate is off by configuration
+  if (!owner || validGeom(owner.geom)) return false;    // no owner, or already has geometry
+  if (!face || !face.seenNow || !face.geomOk || !face.attention) return false;
+  if (!Number.isFinite(face.score) || face.score >= T.driftMax) return false;
+  return validGeom(face.geom);
+}
+
 export function decide(input, tune, prev = {}) {
   const T = { ...TUNE_OWNER_DEFAULTS, ...((tune && tune.owner) || {}) };
   const F = { ...TUNE_FACE_DEFAULTS, ...((tune && tune.face) || {}) };

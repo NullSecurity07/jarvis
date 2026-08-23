@@ -375,7 +375,7 @@ import { HandLandmarker, FaceLandmarker, PoseLandmarker, FilesetResolver } from
 import { createIdentity } from "./js/identity.js";
 import { createFaces } from "./js/faces.js";
 import { createPose } from "./js/pose.js";
-import { decide, isLive, geomDist, driftAppend } from "./js/owner.js";
+import { decide, isLive, geomDist, driftAppend, needsGeomBackfill } from "./js/owner.js";
 import { sideRegions, mapLandmarks, coveredSides } from "./js/rescue.js";
 import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.min.mjs";
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -470,6 +470,7 @@ const LOCK = {
   enroll: null,                          // the auto-enroll window {startT, vecs, yaws}
   candidates: {},                        // face id -> chip element (Task 7)
   driftT: 0, driftBusy: false,           // last template-drift write / write in flight (Task 11 Part B)
+  geomTried: false,                      // THE GEOMETRY BACKFILL tried once this page load (Task 14 #7)
 };
 // THE TWO-SIDED SEARCH (Task 15): ?hands2=0 = local override for one launch.
 const HANDS2_Q = Q.get("hands2") !== "0";
@@ -3511,8 +3512,27 @@ async function enrollTick(now) {
 async function driftTick(V, now) {
   if (!LOCK.enrolled || !LOCK.owner || V.locked || !V.ownerId || !FACES || LOCK.driftBusy) return;
   const T = TUNE.owner;
-  if (!T.driftEveryMs || now - (LOCK.driftT || 0) < T.driftEveryMs) return;
   const f = FACES.list().find(x => x.id === V.ownerId);
+  // THE GEOMETRY BACKFILL (Task 14 #7, controller ruling): an owner
+  // enrolled before Task 11 has vecs but no geom, so geomOk() (js/owner.js)
+  // short-circuits to true forever and the shape gate never engages —
+  // re-enrolling is the only other way out, and the user shouldn't have
+  // to. Runs once ever (LOCK.geomTried), the first time the real owner is
+  // confidently, frontally seen after unlock — ahead of the drift cadence
+  // gate below, since this must not wait driftEveryMs (10 minutes).
+  if (!LOCK.geomTried && f && needsGeomBackfill(LOCK.owner, f, TUNE)) {
+    LOCK.geomTried = true;
+    LOCK.driftBusy = true;
+    try {
+      const seeds = Number.isInteger(LOCK.owner.seeds) ? LOCK.owner.seeds : LOCK.owner.vecs.length;
+      const payload = { vecs: LOCK.owner.vecs, geom: f.geom, prop: LOCK.owner.prop, seeds, at: Date.now() };
+      const r = await fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (r.ok) { LOCK.owner = payload; toast("owner geometry learned — the shape gate is live", 3000); }
+    } catch (_) {}
+    LOCK.driftBusy = false;
+    return;
+  }
+  if (!T.driftEveryMs || now - (LOCK.driftT || 0) < T.driftEveryMs) return;
   if (!f || !f.seenNow || !f.geomOk || !f.attention) return;
   if (!Number.isFinite(f.score) || f.score >= T.driftMax || !f.lastVec) return;
   LOCK.driftBusy = true;
