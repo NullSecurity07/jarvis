@@ -616,12 +616,20 @@ class Handler(SimpleHTTPRequestHandler):
         return bool(_HOST_RE.match(self.headers.get("Host", "")))
 
     def do_HEAD(self):
-        # only reaches the inherited static-file HEAD (serves from HERE,
-        # the repo directory) — the same guard as GET/POST, for the same
-        # reason: a Host-header check must cover every verb, not just two
+        # otherwise only reaches the inherited static-file HEAD (serves
+        # from HERE, the repo directory) — the same Host guard as GET/POST,
+        # for the same reason: it must cover every verb, not just two
         if not self._host_ok():
             self.send_response(403)
             self.end_headers()
+            return
+        url = urllib.parse.urlparse(self.path)
+        if url.path == "/file":
+            # pdf.js and some video/audio clients probe with HEAD (for
+            # Content-Length/Accept-Ranges) before ever sending a Range
+            # GET — same jailed stream as GET, just without the body
+            self._serve_file(urllib.parse.parse_qs(url.query), config(),
+                              want_body=False)
             return
         super().do_HEAD()
 
@@ -650,6 +658,87 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _serve_file(self, q, cfg, want_body=True):
+        # streams one file — JAILED like /files, read-only, no exec. Real
+        # range support (206 + Content-Range): pdf.js and <video>/<audio>
+        # all issue Range requests, and without a real 206 they either
+        # refuse to play or refetch the whole file per seek. Shared by
+        # GET (want_body=True) and HEAD (want_body=False, same headers,
+        # no bytes — some players probe with HEAD before ever ranging).
+        idx = (q.get("root") or ["0"])[0]
+        rel = (q.get("rel") or [""])[0]
+        root = files_root(idx)
+        target = _jail_resolve(root, rel)
+        if target is None or not target.is_file():
+            self.send_response(404)
+            self.end_headers()
+            return
+        try:
+            size = target.stat().st_size
+        except OSError:
+            self.send_response(404)
+            self.end_headers()
+            return
+        max_bytes = int(cfg.get("files", {}).get("maxBytes", 52428800))
+        ctype = ctype_of(kind_of(target.suffix), target.name)
+        start, end, status = 0, size - 1, 200
+        rng = self.headers.get("Range")
+        if rng:
+            m = re.match(r"bytes=(\d*)-(\d*)", rng)
+            if m and (m.group(1) or m.group(2)):
+                if m.group(1):
+                    start = int(m.group(1))
+                    end = int(m.group(2)) if m.group(2) else size - 1
+                else:
+                    start = max(0, size - int(m.group(2)))
+                    end = size - 1
+                if size == 0 or start >= size or start > end:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+                end = min(end, size - 1)
+                status = 206
+        elif size > max_bytes:
+            # no Range: the whole file would have to be served, and the
+            # whole file is over the cap — refuse outright
+            self.send_response(413)
+            self.end_headers()
+            return
+        length = end - start + 1
+        if length > max_bytes:
+            # the cap governs BYTES SERVED, not file size: a ranged
+            # request under the cap streams fine even off an oversized
+            # file (this is what actually lets a big video/audio file
+            # play at all — the whole-file check above only catches an
+            # unranged request)
+            self.send_response(413)
+            self.end_headers()
+            return
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if not want_body:
+            return
+        try:
+            with open(target, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_POST(self):
         global _STATE, _STATE_T, _CMD_SEQ, _ACK
@@ -1039,82 +1128,7 @@ class Handler(SimpleHTTPRequestHandler):
                         "up": up, "dirs": dirs, "files": files})
             return
         if path == "/file":
-            # streams one file — JAILED like /files, read-only, no exec.
-            # Real range support (206 + Content-Range): pdf.js and
-            # <video>/<audio> all issue Range requests, and without a real
-            # 206 they either refuse to play or refetch the whole file
-            # per seek.
-            idx = (q.get("root") or ["0"])[0]
-            rel = (q.get("rel") or [""])[0]
-            root = files_root(idx)
-            target = _jail_resolve(root, rel)
-            if target is None or not target.is_file():
-                self.send_response(404)
-                self.end_headers()
-                return
-            try:
-                size = target.stat().st_size
-            except OSError:
-                self.send_response(404)
-                self.end_headers()
-                return
-            max_bytes = int(cfg.get("files", {}).get("maxBytes", 52428800))
-            ctype = ctype_of(kind_of(target.suffix), target.name)
-            start, end, status = 0, size - 1, 200
-            rng = self.headers.get("Range")
-            if rng:
-                m = re.match(r"bytes=(\d*)-(\d*)", rng)
-                if m and (m.group(1) or m.group(2)):
-                    if m.group(1):
-                        start = int(m.group(1))
-                        end = int(m.group(2)) if m.group(2) else size - 1
-                    else:
-                        start = max(0, size - int(m.group(2)))
-                        end = size - 1
-                    if size == 0 or start >= size or start > end:
-                        self.send_response(416)
-                        self.send_header("Content-Range", f"bytes */{size}")
-                        self.end_headers()
-                        return
-                    end = min(end, size - 1)
-                    status = 206
-            elif size > max_bytes:
-                # no Range: the whole file would have to be served, and
-                # the whole file is over the cap — refuse outright
-                self.send_response(413)
-                self.end_headers()
-                return
-            length = end - start + 1
-            if length > max_bytes:
-                # the cap governs BYTES SERVED, not file size: a ranged
-                # request under the cap streams fine even off an oversized
-                # file (this is what actually lets a big video/audio file
-                # play at all — the whole-file check above only catches
-                # an unranged request)
-                self.send_response(413)
-                self.end_headers()
-                return
-            self.send_response(status)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(length))
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            if status == 206:
-                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            self.end_headers()
-            try:
-                with open(target, "rb") as f:
-                    f.seek(start)
-                    remaining = length
-                    while remaining > 0:
-                        chunk = f.read(min(65536, remaining))
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        remaining -= len(chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+            self._serve_file(q, cfg)
             return
         if path in ("/desks", "/desks/shot", "/desks/stream") \
                 and not cfg.get("desks", {}).get("enabled"):
