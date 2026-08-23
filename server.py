@@ -253,6 +253,45 @@ def _jail_resolve(root, rel):
     return target
 
 
+# THE STATIC DENYLIST (fix round, 2026-08-24): SimpleHTTPRequestHandler's
+# inherited GET/HEAD happily serves ANYTHING under HERE (the repo
+# directory) that isn't one of our own routes — state/owner.json (the
+# user's enrolled face descriptors), jarvis.json (their config, paths and
+# all), .git/ (the whole object store), *.log, and the build ledger were
+# all a plain GET before this. Checked on the DECODED, %-unquoted,
+# ../-normalised path — textual normalisation only (no filesystem touch),
+# so %2e/%2f encoding, a leading //, a trailing slash, or ../ can't slip
+# a denied path past this as something else. Return 404, never 403 (don't
+# confirm existence) — same posture as the /file jail.
+_STATIC_DENY_PREFIXES = ("state/", ".git/", "jarvis.json",
+                          ".superpowers/", "docs/superpowers/")
+
+
+def _static_blocked(path):
+    try:
+        p = urllib.parse.unquote(path or "")
+    except Exception:
+        return True
+    parts = []
+    for seg in p.replace("\\", "/").split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(seg)
+    if not parts:
+        return False                    # "/" itself: not a sensitive path
+    if any(seg.startswith(".") for seg in parts):
+        return True                     # any dotfile/dotdir, anywhere
+    norm = "/".join(parts)
+    if any(norm == pre.rstrip("/") or norm.startswith(pre)
+           for pre in _STATIC_DENY_PREFIXES):
+        return True
+    return norm.lower().endswith(".log")
+
+
 # ---- THE FILES BROWSER's kind classifier (extension -> a coarse type the
 # page renders differently): explicit lists, not a library sniff — this
 # never opens the file, so a renamed binary just lands in "other".
@@ -651,6 +690,17 @@ class Handler(SimpleHTTPRequestHandler):
     def _host_ok(self):
         return bool(_HOST_RE.match(self.headers.get("Host", "")))
 
+    def _csrf_ok(self):
+        # DEFENSE IN DEPTH, not a hard gate: _host_ok defends against DNS
+        # rebinding (a hostile page reaching us at all); this narrows
+        # WHO can act, for the state-changing routes, once a page has
+        # legitimately reached us. A modern browser stamps Sec-Fetch-Site
+        # on every request; curl and bin/board.sh never send it at all,
+        # so its ABSENCE is allowed on purpose — this must never break
+        # the AI driving the board from the command line.
+        site = self.headers.get("Sec-Fetch-Site")
+        return site is None or site in ("same-origin", "same-site", "none")
+
     def do_HEAD(self):
         # otherwise only reaches the inherited static-file HEAD (serves
         # from HERE, the repo directory) — the same Host guard as GET/POST,
@@ -666,6 +716,10 @@ class Handler(SimpleHTTPRequestHandler):
             # GET — same jailed stream as GET, just without the body
             self._serve_file(urllib.parse.parse_qs(url.query), config(),
                               want_body=False)
+            return
+        if _static_blocked(url.path):
+            self.send_response(404)
+            self.end_headers()
             return
         super().do_HEAD()
 
@@ -784,6 +838,14 @@ class Handler(SimpleHTTPRequestHandler):
             return
         url = urllib.parse.urlparse(self.path)
         path, q = url.path, urllib.parse.parse_qs(url.query)
+        # CSRF, defense in depth: state-changing routes only. /state is
+        # the tracker's own ~45Hz heartbeat, not a write a hostile page
+        # would want, so it's deliberately excluded here.
+        if path in ("/cmd", "/desks/cmd", "/owner", "/cam", "/dump") \
+                and not self._csrf_ok():
+            self.send_response(403)
+            self.end_headers()
+            return
         n = int(self.headers.get("Content-Length", 0) or 0)
         cap = 64_000_000 if path == "/dump" else 262144
         body = self.rfile.read(n) if 0 < n < cap else b"{}"
@@ -1301,6 +1363,10 @@ class Handler(SimpleHTTPRequestHandler):
             self._raw(body)
             return
         if path != "/note":
+            if _static_blocked(path):
+                self.send_response(404)
+                self.end_headers()
+                return
             return super().do_GET()
         # one note's text: f=<orb>/<relpath>, resolved against that orb's
         # jail. Inside the root, .md only, must exist — anything else 404s.
