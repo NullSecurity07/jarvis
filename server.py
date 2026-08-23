@@ -95,6 +95,7 @@ Missing files are fine — the ring just idles.
 import collections
 import json
 import mimetypes
+import os
 import re
 import shutil
 import subprocess
@@ -294,10 +295,17 @@ _DESK_EXCLUDE_CLASS = {"polybar"}
 # fix round 1: the original rule (title EXACTLY "jarvis") missed a real
 # case live — the controller's verification browser was class
 # Chromium-browser, title "jarvis – <tab title>", which slipped through
-# and mirrored the board into itself. Any BROWSER window (by class) whose
-# title CONTAINS "jarvis" (case-insensitive) is the board now, covering
-# Chrome/Chromium under any window-title suffix the tab adds.
-_DESK_BROWSER_CLASS = {"google-chrome", "chromium", "chromium-browser", "chrome"}
+# and mirrored the board into infinity. Any BROWSER window (by class)
+# whose title CONTAINS "jarvis" (case-insensitive) is the board now,
+# covering any window-title suffix the tab adds. Firefox-family (firefox,
+# zen — verified live during round 2 testing: a real "...jarvis... — Zen
+# Browser" window existed on this machine and was NOT excluded before
+# this line) added alongside Chromium-family for the same reason; the
+# launcher only opens the board in a dedicated Chrome profile, but the
+# self-mirror risk this guards against applies to whatever browser a
+# jarvis-titled tab happens to be open in.
+_DESK_BROWSER_CLASS = {"google-chrome", "chromium", "chromium-browser", "chrome",
+                       "firefox", "zen"}
 _DESK_LOCK = threading.Lock()
 _DESK_CACHE = {}          # xid -> {"t": monotonic, "png": bytes}
 _DESK_STREAMS = 0         # concurrent /desks/stream connections
@@ -316,7 +324,6 @@ def _desks_int(v):
 
 def _desks_env():
     d = config().get("desks", {})
-    import os
     env = dict(os.environ)
     env["DISPLAY"] = str(d.get("display", ":0"))
     env["XAUTHORITY"] = str(d.get("xauthority", "/run/user/1000/lyxauth"))
@@ -369,6 +376,15 @@ def _desks_snapshot():
             walk(c, ws_num)
     if isinstance(tree, dict):
         walk(tree, None)
+    # fix round 2: _DESK_CACHE never shrank on its own — every xid ever
+    # captured over the process's lifetime kept its last PNG in memory
+    # permanently, even long after the window closed. Every call here
+    # (every /desks*, and every /desks/stream loop tick) opportunistically
+    # drops entries for xids no longer in the live tree.
+    with _DESK_LOCK:
+        alive = {w["xid"] for w in wins}
+        for stale in [xid for xid in _DESK_CACHE if xid not in alive]:
+            del _DESK_CACHE[stale]
     return {"ws": ws, "wins": wins}
 
 
@@ -938,7 +954,13 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 cmd = json.loads(body)
                 a = cmd.get("a")
-                assert a in ("workspace", "focus", "move", "layout", "fullscreen")
+                # fix round 2: assert is stripped under python -O — this
+                # must not be the stated line of defence for the action
+                # allowlist (the if/elif chain below re-checks the same
+                # strings, which is why it was harmless in practice, but
+                # that's incidental, not the design).
+                if a not in ("workspace", "focus", "move", "layout", "fullscreen"):
+                    raise ValueError("unknown action")
                 snap = _desks_snapshot()
                 if a == "workspace":
                     n = cmd.get("n")
@@ -1189,6 +1211,19 @@ class Handler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 period = 1.0 / max(1, min(10, int(cfg.get("desks", {}).get("fps", 4))))
                 while True:
+                    # fix round 2: the snapshot at the top of this handler
+                    # was taken ONCE, before the loop, and never re-checked
+                    # — a closed window's stream just kept re-sending its
+                    # last cached frame (or nothing) forever, silently
+                    # occupying one of only maxStreams slots. Re-checking
+                    # existence every tick (cheap: get_workspaces+get_tree
+                    # over the local i3 IPC socket) ends the response the
+                    # moment the window is gone, releasing the slot via the
+                    # finally below — the page notices on its own poll
+                    # (desksHealthCheck) and closes the dead card instead
+                    # of showing a frozen frame forever.
+                    if not any(w["xid"] == xid for w in _desks_snapshot()["wins"]):
+                        break
                     png, ok = _desks_capture(xid)
                     if png:
                         self.wfile.write(

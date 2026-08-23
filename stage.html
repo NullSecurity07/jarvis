@@ -1811,6 +1811,12 @@ function makeOrb(def) {
 function ringToggle(ring) {
   const up = items.filter(i => i.type === "orb" && i.el.isConnected);
   if (up.length) { up.forEach(killItem); return; }
+  // fix round 2: the desks orb's count below reads the cached DESKS var,
+  // which can be stale (last touched whenever the pane was last opened).
+  // This bloom still shows whatever it has cached — a synchronous refetch
+  // here would delay every orb's bloom for one cosmetic number — but a
+  // fire-and-forget refresh means the NEXT bloom is accurate.
+  if ((CFG.orbs || []).some(o => o.kind === "desks")) loadDesks();
   const defs = (CFG.orbs || []).map((o, i) => {
     if (o.kind === "media") {
       const p = treeCounts(PROPSTREE, true);
@@ -2206,15 +2212,19 @@ function stageDesk(xid, title) {
 // THE DESKS (fix round 1): the user's headline ask was "see multiple
 // desktops at once" — before this, every staged desk landed at the same
 // default centre and stacked unreadably. Every UNPINNED live desk card
-// (not currently fading out) is arranged on a simple grid, centred as a
-// group, gliding to its slot (the "tile" anim in physics()) rather than
-// snapping. A card the user has grabbed at all is marked pinned
-// (beginGrab) and is left exactly where they put it.
-function retileDesks() {
-  const live = items.filter(i => i.type === "desk" && i.el.isConnected &&
-                                 !i.pinned && (!i.anim || i.anim.k !== "out"));
-  const n = live.length;
-  if (!n) return;
+// (not currently fading out or departing a fling) is arranged on a
+// simple grid, centred as a group, gliding to its slot (the "tile" anim
+// in physics()) rather than snapping. A card the user has ACTUALLY
+// DRAGGED (endGrab — a tap never counts) is pinned and left where they
+// put it, unless the drop lands close enough to where it would have
+// landed in the grid anyway (desksHypotheticalSlot) — see endGrab.
+function desksGridSlots(list) {
+  // the shared grid math: n items -> {it,x,y,s} slots, centred as a
+  // group. Used both for the REAL layout (retileDesks) and to answer
+  // "where would THIS ONE card land if it rejoined" (desksHypotheticalSlot)
+  // without duplicating the arithmetic.
+  const n = list.length;
+  if (!n) return [];
   const cols = Math.ceil(Math.sqrt(n));
   const rows = Math.ceil(n / cols);
   const mx = 40, my = 40;
@@ -2223,14 +2233,60 @@ function retileDesks() {
   const NATW = 640, NATH = 460;   // .panel.desk's natural (scale-1) size
   const fit = Math.min(1.3, Math.max(0.35,
     Math.min(cellW / NATW, cellH / NATH) * 0.92));
-  live.forEach((it, i) => {
+  return list.map((it, i) => {
     const col = i % cols, row = Math.floor(i / cols);
-    const x1 = mx + col * (cellW + mx) + cellW / 2;
-    const y1 = my + row * (cellH + my) + cellH / 2;
+    return { it, x: mx + col * (cellW + mx) + cellW / 2,
+                 y: my + row * (cellH + my) + cellH / 2, s: fit };
+  });
+}
+
+function desksLiveUnpinned() {
+  return items.filter(i => i.type === "desk" && i.el.isConnected &&
+                           !i.pinned && !i._departing &&
+                           (!i.anim || i.anim.k !== "out"));
+}
+
+function retileDesks() {
+  desksGridSlots(desksLiveUnpinned()).forEach(({ it, x, y, s }) => {
     const curOp = it.el.style.opacity === "" ? 1 : parseFloat(it.el.style.opacity);
     it.anim = { k: "tile", t: 0, x0: it.x, y0: it.y, s0: it.scale,
-                x1, y1, s1: fit, op0: isNaN(curOp) ? 1 : curOp };
+                x1: x, y1: y, s1: s, op0: isNaN(curOp) ? 1 : curOp };
   });
+}
+
+// fix round 2: where would `c` land if it were part of the grid right
+// now? Used by endGrab to decide whether a drag that just ended should
+// REJOIN the grid (dropped close to this) instead of pinning.
+function desksHypotheticalSlot(c) {
+  const others = desksLiveUnpinned().filter(i => i !== c);
+  const slot = desksGridSlots([...others, c]).find(s => s.it === c);
+  return slot ? { x: slot.x, y: slot.y } : null;
+}
+
+// THE DESKS (fix round 2): the server ends a window's /desks/stream the
+// moment that window closes, but an <img> gets no error for a response
+// that just ends normally — it freezes on the last frame forever with no
+// signal. There's no "stream ended" event to hook, so this polls live
+// desk cards against a fresh /desks snapshot on an interval and closes
+// any whose window is gone. Tracker role only (started at the bottom of
+// this file, alongside boot()) — the render mirror has no items to own.
+async function desksHealthCheck() {
+  const live = items.filter(i => i.type === "desk" && i.el.isConnected);
+  if (!live.length) return;
+  let d;
+  try { const r = await fetch("/desks"); if (r.ok) d = await r.json(); }
+  catch (e) { return; }
+  if (!d) return;
+  const aliveXids = new Set((d.wins || []).map(w => w.xid));
+  let closedAny = false;
+  live.forEach(it => {
+    if (!aliveXids.has(it.def.xid)) {
+      toast(`"${it.def.title || "a live desktop"}" closed`, 2200);
+      killItem(it);
+      closedAny = true;
+    }
+  });
+  if (closedAny) retileDesks();
 }
 
 // The row's small focus affordance AND a live card's double-tapped bar
@@ -3099,10 +3155,9 @@ function beginGrab(c, i, cur) {
       const barR = barEl && barEl.getBoundingClientRect();
       c.barGrab = !!(barR && cur.y >= barR.top && cur.y <= barR.bottom &&
                     cur.x >= barR.left && cur.x <= barR.right);
-      // fix round 1: ANY grab at all — bar or body — pins a desk card
-      // out of retileDesks()'s auto-arrange from here on; the user
-      // touched it, so its position is theirs to keep.
-      c.pinned = true;
+      // fix round 2: pinning is decided at RELEASE (endGrab), not here —
+      // a bar tap-to-close or double-tap-to-focus must never pin a card
+      // it's about to act on or that never actually moved.
     } else {
       // GLASS ERA: every movable item arms the hold-to-rotate timer
       c.mode = "move";
@@ -3179,6 +3234,26 @@ function endGrab(c, i, cur) {
         }
       }
       c.barGrab = false;
+    }
+    // THE DESKS (fix round 2): pinning fires on an ACTUAL DRAG only —
+    // mirrors the card tap-open discrimination just below (tTrav <
+    // TUNE.tap.px) — never on grab-start, so a tap or double-tap on the
+    // bar (handled above, its own tighter 350ms/24px gate) never pins.
+    // And pinning has a way back: dropping the card within ~70px of
+    // where it would land in the CURRENT grid rejoins it there instead
+    // of requiring a full close+re-stage — chosen over "only close+
+    // re-stage unpins" because that would leave an already-pinned card
+    // stuck until the user gives up its live stream entirely, worse UX
+    // for a feature whose whole point is seeing several at once.
+    if (c.type === "desk" && !cur.probKill) {
+      const rMs = performance.now() - (cur.grabT || 0);
+      const rTrav = Math.hypot(cur.x - (c.tapX || cur.x),
+                               cur.y - (c.tapY || cur.y));
+      if (!(rMs < TUNE.tap.ms && rTrav < TUNE.tap.px)) {
+        const slot = desksHypotheticalSlot(c);
+        c.pinned = !(slot && Math.hypot(c.x - slot.x, c.y - slot.y) < 70);
+        if (!c.pinned) retileDesks();
+      }
     }
     // GESTURE v3 (2026-08-14, Jared's spec — "make it a single pinch"):
     // THE TAP OPENS — a quick, near-still release on a file-card
@@ -3445,6 +3520,14 @@ function physics(dt) {
           c.y < -600 || c.y > innerHeight + 600) {
         c.el.style.opacity = "0"; c.flying = false;
         if (c.type !== "panel") foley.void_();
+        if (c.type === "desk") {
+          // fix round 2: a flung desk left a hole in the grid — nothing
+          // on this removal path called retileDesks(). _departing keeps
+          // desksLiveUnpinned() from grid-placing (and un-fading) this
+          // one during the 300ms it takes to actually leave the DOM.
+          c._departing = true;
+          retileDesks();
+        }
         setTimeout(() => c.el.remove(), 300);
       }
     }
@@ -5463,6 +5546,7 @@ if (ROLE === "render") {
     document.getElementById("boot").innerHTML =
       `STAGE FAILED TO BOOT<br><span style="color:#ff6666;font-size:13px">${e.message}</span>`;
   });
+  setInterval(desksHealthCheck, 4000);   // THE DESKS (fix round 2)
 }
 </script>
 </body>
