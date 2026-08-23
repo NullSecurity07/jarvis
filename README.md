@@ -41,16 +41,16 @@ A `files` orb browses any folder on disk — not just notes and the media airloc
 ```json
 "files": {
   "roots": [
-    { "title": "Home",    "path": "~" },
-    { "title": "Desktop", "path": "~/Desktop" }
+    { "title": "Documents", "path": "~/Documents" },
+    { "title": "Desktop",   "path": "~/Desktop" }
   ],
   "maxBytes": 52428800
 }
 ```
 
-Missing the key entirely = one `Home` root at `~`, 50MB cap. Each root becomes its own orb; tap one and its folder listing unfolds the same glass pane as a notes orb, with an `..` row to go back up. Every row is tagged with its kind (`PDF`, `IMG`, `TXT`, `MP4`, …) and opens accordingly: markdown in the note panel, text/code in a monospace panel (capped at 200KB), images as 3D reliefs, PDFs in a pdf.js panel (the same scroll gesture that pages a note turns PDF pages), video/audio in a controls card, `.glb`/`.gltf` as a hologram, anything else as a plain "here's what this is" card — nothing unrecognized ever gets dumped raw into the page.
+Missing the key entirely = one `Documents` root at `~/Documents`, 50MB cap (`~` itself is deliberately never a default or example root — it would hand out `~/.ssh` and everything else in your home directory; point a root at `~` yourself if you really want that). Each root becomes its own orb; tap one and its folder listing unfolds the same glass pane as a notes orb, with an `..` row to go back up. Every row is tagged with its kind (`PDF`, `IMG`, `TXT`, `MP4`, …) and opens accordingly: markdown in the note panel, text/code in a monospace panel (capped at 200KB), images as 3D reliefs, PDFs in a pdf.js panel (the same scroll gesture that pages a note turns PDF pages), video/audio in a controls card, `.glb`/`.gltf` as a hologram, anything else as a plain "here's what this is" card — nothing unrecognized ever gets dumped raw into the page.
 
-**Read-only.** The server only ever opens files for reading, jailed to the configured roots exactly like a notes orb (symlink escapes and `..` are rejected by resolving the real path and checking it's still inside the root) — there is no write, delete, or execute path anywhere in `/files` or `/file`. A root you don't add is never reachable; you're opting a folder in by naming it here.
+**Read-only.** The server only ever opens files for reading, jailed to the configured roots exactly like a notes orb (symlink escapes and `..` are rejected by resolving the real path and checking it's still inside the root; every dot-prefixed path segment — `.ssh`, `.bash_history`, `.config`, `.git`, ... — is refused outright, wherever it would land) — there is no write, delete, or execute path anywhere in `/files` or `/file`. A root you don't add is never reachable; you're opting a folder in by naming it here.
 
 ## Tuning — `tuning.json`
 
