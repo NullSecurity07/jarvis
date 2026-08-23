@@ -1641,23 +1641,26 @@ const CAMGOV = (() => {
   const LIGHT = { auto_exposure: 3, exposure_dynamic_framerate: 1,
                   region_of_interest_auto_ctrls: 16 };
   // THE TONE LADDER: the ISP's own lift (gamma = midtones, brightness =
-  // black level, backlight comp). Rung 2 is the proven dark-room lift;
-  // rung 0 is the driver's neutral — in a lit room rung 2 washes the
-  // frame to milk (seen 2026-08-23 when the room light came on: hand
-  // zone 0.83, no contrast left). The governor climbs when the hand
-  // zone is dark, descends when it is bright, 2s dwell either way.
+  // black level, backlight comp). Rung 0 is the driver's neutral.
+  // CLINIC VERDICT (his hand, 2026-08-23 19:24, dark room): every FAST
+  // state detected 100%, but landmark jitter at the old rung 2 (gamma
+  // 150 / brightness 170 / bl 2) was 116–121‰ of span against 22‰ at
+  // rung 0 + software lift 2.84 — the brightness OFFSET raises the
+  // black level and eats the contrast the landmark model needs, while
+  // the gamma curve keeps it. So: the software lift does the lifting;
+  // the ladder is a last resort that only climbs when the lift is
+  // saturated, stops at rung 1, and descends at the first chance.
   const TONE = [ { gamma: 120, brightness: 128, backlight_compensation: 1 },
-                 { gamma: 135, brightness: 150, backlight_compensation: 2 },
-                 { gamma: 150, brightness: 170, backlight_compensation: 2 } ];
+                 { gamma: 135, brightness: 136, backlight_compensation: 1 } ];
   const G = {
     mode: "auto",          // auto | fast | light — the user's wish
     state: "fast",         // the applied hardware state
-    tone: 1, toneUp: 0.33, toneDown: 0.60, toneSince: 0, toneT: 0,
+    tone: 0, toneUp: 0.30, toneDown: 0.45, toneSince: 0, toneT: 0,
     have: null,            // last /cam readback, null = no bridge
     lumaG: 0, lumaH: 0, p10: 0, p90: 0,   // raw-frame luma (0..1)
     zone: "fixed", zoneBox: [0.2, 0.3, 0.8, 1.0],  // where hands live
     handBox: null, lastHandT: 0,
-    gain: 1, target: 0.42, gainMax: 3.0,  // software lift: gain = target/lumaH
+    gain: 1, target: 0.42, gainMax: 3.5,  // software lift: gain = target/lumaH
     exp: 1, lumaL: 0,                     // the gamma exponent applied; lifted hand-zone luma
     handBoxes: [],                        // every tracked hand's bbox this frame
     floor: 0.12,           // raw hand-zone luma below this = too dark to lift
@@ -1777,9 +1780,12 @@ const CAMGOV = (() => {
                        fresh.length ? fresh[0] : G.zoneBox).med;
     } else G.lumaL = G.lumaH;
     if (G.clinic) return;                              // the clinic drives
-    // the tone ladder (any mode): dark hand zone climbs, bright descends
+    // the tone ladder (any mode): climbs only when the software lift is
+    // already saturated and the hand zone is still dark; descends as
+    // soon as the lift alone could carry it
     if (G.have && !G.applying && now - G.toneT > 2500) {
-      const wantUp = G.lumaH < G.toneUp && G.tone < 2;
+      const wantUp = G.lumaH < G.toneUp && G.gain > G.gainMax * 0.95 &&
+                     G.tone < TONE.length - 1;
       const wantDn = G.lumaH > G.toneDown && G.tone > 0;
       if (wantUp || wantDn) {
         if (!G.toneSince) G.toneSince = now;
@@ -1854,13 +1860,14 @@ const CAMGOV = (() => {
 // a CAMERA CLINIC card on the board. K again aborts.
 const CLINIC = (() => {
   const G = CAMGOV.G;
-  const T0 = CAMGOV.TONE[0], T2 = CAMGOV.TONE[2];
+  const T0 = CAMGOV.TONE[0], T1 = CAMGOV.TONE[1];
+  const OLD2 = { gamma: 150, brightness: 170, backlight_compensation: 2 };  // the retired rung
   const CFGS = [
-    { k: "L  light  dyn1 tone2",       set: { ...CAMGOV.LIGHT, ...T2, gamma: 120 }, lift: 1 },
-    { k: "F  fast   dyn0 tone2 +lift", set: { ...CAMGOV.FAST, ...T2 },  lift: null },
-    { k: "F0 fast   dyn0 tone2 raw",   set: { ...CAMGOV.FAST, ...T2 },  lift: 1 },
-    { k: "F1 fast   dyn0 tone0 +lift", set: { ...CAMGOV.FAST, ...T0 },  lift: null },
-    { k: "M  manual 1/30 tone2 +lift", set: { ...CAMGOV.FAST, ...T2, auto_exposure: 1,
+    { k: "L  light  dyn1 old-rung2",   set: { ...CAMGOV.LIGHT, ...OLD2, gamma: 120 }, lift: 1 },
+    { k: "F  fast   dyn0 tone0 +lift", set: { ...CAMGOV.FAST, ...T0 },  lift: null },
+    { k: "F0 fast   dyn0 tone0 raw",   set: { ...CAMGOV.FAST, ...T0 },  lift: 1 },
+    { k: "F1 fast   dyn0 tone1 +lift", set: { ...CAMGOV.FAST, ...T1 },  lift: null },
+    { k: "M  manual 1/30 tone0 +lift", set: { ...CAMGOV.FAST, ...T0, auto_exposure: 1,
                                                exposure_time_absolute: 333 }, lift: null },
   ];
   const PH = { settle: 1500, still: 3000, move: 3000 };
@@ -2550,7 +2557,7 @@ async function boot() {
     try {
       const fresh = await makeLandmarker();
       const old = landmarker; landmarker = fresh; old.close();
-      PERF.det = 0;
+      PERF.det = 0; PERF.rearm = (PERF.rearm || 0) + 1; PERF.rearmT = Date.now();
       toast("hand tracker re-armed", 2500);
       _reFails++;   // provisional — proven-fast inference clears it
       setTimeout(() => { if (PERF.det && PERF.det < 20) _reFails = 0; }, 3000);
@@ -3468,6 +3475,7 @@ function pushState(now) {
   const st = {
     perf: { det: +PERF.det.toFixed(1), loop: +PERF.loop.toFixed(1),
             raf: +PERF.raf.toFixed(1), fps, log: window._mpLog || undefined,
+            rearm: PERF.rearm || 0, rearmT: PERF.rearmT || 0, up: Math.round(performance.now() / 1000),
             cam: CAMGOV.telemetry(), clinic: PERF.clinic || undefined },
     cursors: Object.keys(cursors).sort().filter(k => cursors[k].seenNow).map(k => {
       const c = cursors[k];
