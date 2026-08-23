@@ -183,8 +183,12 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .brow .bico { color:#8ff0e4; width:28px; text-align:center; flex:none;
                 font-size:20px; }
   .brow.dir .btxt { color:#8ff0e4; font-weight:600; letter-spacing:0.02em; }
-  .brow.note .btxt, .brow.prop .btxt, .brow.widget .btxt { color:#ecfffa; }
-  .brow .btxt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .brow.note .btxt, .brow.prop .btxt, .brow.widget .btxt,
+  .brow.file .btxt, .brow.up .btxt { color:#ecfffa; }
+  .brow .btxt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:1; }
+  .brow .bkind { flex:none; font:11px "SF Mono",Menlo,monospace; letter-spacing:0.06em;
+                 color:#8ff0e4; opacity:0.75; border:1px solid rgba(111,229,214,0.4);
+                 border-radius:4px; padding:2px 6px; }
   /* THE TAP FLASH (2026-08-13, the mirror-doctrine softener): the row
      you tap pulses full-width on BOTH pages. Rows span the pane and
      vertical never mirrors, so the pulse sits directly under the
@@ -218,6 +222,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .panel .scroll { transition:none; font-size:14.5px; line-height:1.5; color:#dcf5ee; text-shadow:0 1px 3px rgba(3,18,16,0.55);
                    white-space:pre-wrap; font-family:-apple-system,sans-serif; }
   .panel .scroll b { color:#fff; } .panel .scroll .h { color:#8ff0e4; font-weight:700; }
+  .panel.textview .scroll { font-family:"SF Mono",Menlo,monospace; font-size:13px; }
+  .panel.pdfview .body { display:flex; align-items:center; justify-content:center; }
+  .panel.pdfview .scroll { display:flex; align-items:center; justify-content:center;
+                            overflow:auto; white-space:normal; }
+  .panel.pdfview canvas { max-width:100%; max-height:100%; border-radius:6px;
+                          box-shadow:0 6px 30px rgba(0,0,0,0.4); }
+  .card.mediacard video, .card.mediacard audio { width:100%; border-radius:8px;
+                                                  display:block; margin-top:4px; }
   .cursor { position:absolute; width:28px; height:28px; margin:-14px 0 0 -14px;
             border-radius:50%; border:2.5px solid rgba(111,229,214,0.9);
             background:rgba(111,229,214,0.12); pointer-events:none; z-index:999; }
@@ -365,6 +377,9 @@ import { createFaces } from "./js/faces.js";
 import { createPose } from "./js/pose.js";
 import { decide, isLive, geomDist, driftAppend } from "./js/owner.js";
 import { sideRegions, mapLandmarks, coveredSides } from "./js/rescue.js";
+import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.min.mjs";
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.mjs";
 
 // ---- THE TUNING FILE. Every hand-fitted number the gates read lives in
 // tuning.json (GET /tuning) and lands here BEFORE any module code below
@@ -616,6 +631,24 @@ function makeImage(src, title) {
   return { el, id: UID++, type: "img",
            def: { title: title || "", file: "", src,
                   fx: fx || vid ? 1 : 0, vid: vid ? 1 : 0 },
+           x: innerWidth * 0.5, y: innerHeight * 0.42, scale: 1, vx: 0, vy: 0,
+           grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
+}
+
+// THE FILES BROWSER (Task 16): a played-back video/audio file, native
+// controls and all. type "media" falls into physics()'s generic
+// move/hold-rotate bucket (same as "img"/"card" — nothing special-cased).
+function makeMedia(src, title, kind) {
+  const el = document.createElement("div");
+  el.className = "card mediacard";
+  el.innerHTML = `<h3>${escT(title)}</h3>` +
+    (kind === "audio"
+      ? `<audio src="${escT(src)}" controls preload="metadata"></audio>`
+      : `<video src="${escT(src)}" controls preload="metadata" playsinline></video>`);
+  BEHIND.appendChild(el);
+  return { el, id: UID++, type: "media",
+           def: { title: title || "", file: "", src,
+                  mkind: kind === "audio" ? "audio" : "video" },
            x: innerWidth * 0.5, y: innerHeight * 0.42, scale: 1, vx: 0, vy: 0,
            grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
 }
@@ -1596,6 +1629,11 @@ function applyCmds(cmds) {
       else if (c.a === "hand") deliver(it);
       else { it.anim = { k: "in", t: 0 }; it.el.style.opacity = "0.05"; }
       items.push(it);
+    } else if (c.a === "open_file" && c.rel != null) {
+      // THE FILES BROWSER, staged by the assistant: root/rel already
+      // jailed server-side — open it exactly like a user's tap would.
+      openFileByKind(c.root, c.rel, String(c.rel).split("/").pop(),
+                     FILE_EXT_KIND[extOf(c.rel)] || "other", null);
     } else if (c.a === "add_card" && c.title) {
       // the note-throw: add_card carries an optional notes `file` —
       // the delivered card flash-opens into the full note (the /note
@@ -1613,9 +1651,12 @@ function applyCmds(cmds) {
     } else if (c.a === "widget") {
       summonWidget(c.w || "ring");
     } else if (c.a === "scroll_note") {
-      // the assistant as teleprompter operator: glides the newest note
+      // the assistant as teleprompter operator: glides the newest note —
+      // or turns pages, for a PDF panel (same verb, same hooked input)
       const p = items.filter(k => k.type === "panel").pop();
-      if (p && p.body) {
+      if (p && p.def.ptype === "pdf") {
+        pdfGoPage(p, c.dir);
+      } else if (p && p.body) {
         const box = p.body.parentElement.clientHeight;
         const maxS = Math.max(0, p.body.offsetHeight - box + 40);
         p.sTarget = c.dir === "top" ? 0 : Math.min(maxS, Math.max(0,
@@ -1708,6 +1749,9 @@ function ringToggle(ring) {
       return { title: o.title || "Props",
                body: `${p.dirs} folders · ${p.leaves} props`, orb: "props" };
     }
+    if (o.kind === "files") {
+      return { title: o.title || "Files", body: "browse", orb: "f" + o.root };
+    }
     const v = treeCounts(TREES[i], false);
     return { title: o.title || "Notes",
              body: `${v.dirs} folders · ${v.leaves} notes`, orb: i };
@@ -1739,7 +1783,7 @@ async function loadTree() {
   TREES = [];
   for (let i = 0; i < (CFG.orbs || []).length; i++) {
     TREES[i] = null;
-    if (CFG.orbs[i].kind === "media") continue;
+    if (CFG.orbs[i].kind === "media" || CFG.orbs[i].kind === "files") continue;
     try { const r = await fetch("/tree?orb=" + i);
           if (r.ok) TREES[i] = await r.json(); }
     catch (e) {}
@@ -1779,6 +1823,17 @@ function escT(t) {
 
 function browserRows(b) {
   const out = [];
+  if (b.froot != null) {
+    // THE FILES BROWSER: one directory level, lazily fetched as the
+    // user descends — NOT the notes/props whole-tree-upfront pattern
+    // (an arbitrary root can be enormous).
+    const d = b.fdir;
+    if (!d) return out;
+    if (d.up != null) out.push({ d: 0, t: "..", k: "up", rel: d.up });
+    d.dirs.forEach(sub => out.push({ d: 0, t: sub.name, k: "dir", rel: sub.rel }));
+    d.files.forEach(f => out.push({ d: 0, t: f.name, k: "file", kk: f.kind, rel: f.rel }));
+    return out;
+  }
   const walk = (d, path, depth, isProps) => {
     d.dirs.forEach(sub => {
       const key = path + "/" + sub.name;
@@ -1797,17 +1852,23 @@ function browserRows(b) {
   return out;
 }
 
+const FILE_KIND_TAG = { md: "MD", text: "TXT", code: "CODE", pdf: "PDF",
+  image: "IMG", video: "VID", audio: "AUD", model: "3D", archive: "ZIP",
+  other: "BIN" };
 function browserRowsHTML(tuples) {
-  const ICO = { dir0: "▸", dir1: "▾", note: "▤", prop: "▦", widget: "▣" };
-  return tuples.map(([d, t, k, o], i) =>
+  const ICO = { dir0: "▸", dir1: "▾", note: "▤", prop: "▦", widget: "▣",
+                file: "▤", up: "⬆" };
+  return tuples.map(([d, t, k, o, kk], i) =>
     `<div class="brow ${k}" data-i="${i}" style="padding-left:${18 + d * 26}px">` +
     `<span class="bico">${k === "dir" ? ICO["dir" + o] : ICO[k]}</span>` +
-    `<span class="btxt">${escT(t)}</span></div>`).join("");
+    `<span class="btxt">${escT(t)}</span>` +
+    (kk ? `<span class="bkind">${FILE_KIND_TAG[kk] || "?"}</span>` : "") +
+    `</div>`).join("");
 }
 
 function browserRefresh(b) {
   b.rows = browserRows(b);
-  b.rowTuples = b.rows.map(r => [r.d, r.t, r.k, r.o || 0]);
+  b.rowTuples = b.rows.map(r => [r.d, r.t, r.k, r.o || 0, r.kk]);
   b.rowsV = (b.rowsV || 0) + 1;
   b.body.innerHTML = browserRowsHTML(b.rowTuples);
   const box = b.body.parentElement.clientHeight;
@@ -1816,12 +1877,45 @@ function browserRefresh(b) {
   b.body.style.transform = `translateY(${-b.scrollY}px)`;
 }
 
+async function loadFilesDir(b, rel) {
+  try {
+    const r = await fetch("/files?root=" + b.froot + "&rel=" + encodeURIComponent(rel || ""));
+    if (r.ok) b.fdir = await r.json();
+  } catch (e) {}
+  browserRefresh(b);
+}
+
 function openBrowser(kind, ox, oy) {
   // TOGGLE: tap the orb (or summon) again = the pane recedes. Phase 2:
   // an orb tap passes its position so the pane GROWS FROM the orb's
   // spot (clamped fully onscreen) — the circle language never breaks.
   const ex = items.find(i => i.type === "browser" && i.bkind === kind);
   if (ex) { killItem(ex); return; }
+  const fm = typeof kind === "string" && kind.match(/^f(\d+)$/);
+  if (fm) {
+    const froot = +fm[1];
+    const label = String(((CFG.orbs || []).find(o =>
+      o.kind === "files" && o.root === froot) || {}).title || "Files").toUpperCase();
+    const el = document.createElement("div");
+    el.className = "panel browser";
+    el.innerHTML = `<div class="bar"><h3>${escT(label)}</h3></div>` +
+                   `<div class="body"><div class="scroll"></div></div>`;
+    BEHIND.appendChild(el);
+    const b = { el, id: UID++, type: "browser", bkind: kind, froot,
+      def: { title: label, file: "" },
+      expanded: new Set(), rows: [], rowTuples: [], rowsV: 0, fdir: null,
+      x: ox != null ? Math.min(Math.max(ox, 300), innerWidth - 300)
+                    : innerWidth * 0.38,
+      y: oy != null ? Math.min(Math.max(oy, 380), innerHeight - 380)
+                    : innerHeight * 0.46,
+      scale: 1, vx: 0, vy: 0,
+      grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null,
+      scrollY: 0, body: el.querySelector(".scroll") };
+    b.anim = { k: "in", t: 0 }; b.el.style.opacity = "0.05";
+    items.push(b);
+    loadFilesDir(b, "");
+    return;
+  }
   loadTree().then(() => {
     const label = String(kind === "props" ? "Props"
       : ((CFG.orbs || [])[kind] || {}).title || "Notes").toUpperCase();
@@ -1869,9 +1963,15 @@ function browserTap(b, cur) {
       b.flashV = (b.flashV || 0) + 1;
       setTimeout(() => flashRow(b.body, b.flashI), 0);
       if (row.k === "dir") {
-        if (b.expanded.has(row.key)) b.expanded.delete(row.key);
-        else b.expanded.add(row.key);
-        browserRefresh(b);
+        if (b.froot != null) {
+          loadFilesDir(b, row.rel);           // THE FILES BROWSER: descend
+        } else {
+          if (b.expanded.has(row.key)) b.expanded.delete(row.key);
+          else b.expanded.add(row.key);
+          browserRefresh(b);
+        }
+      } else if (row.k === "up") {
+        loadFilesDir(b, row.rel || "");
       } else if (row.k === "note") {
         openPanel({ def: { file: row.f, title: row.t } });
         killItem(b);   // v3.3 (his broadened rule): selecting ANYTHING
@@ -1883,6 +1983,9 @@ function browserTap(b, cur) {
         it.x = Math.min(b.x + 480, innerWidth - 240); it.y = b.y;
         it.anim = { k: "in", t: 0 }; it.el.style.opacity = "0.05";
         items.push(it);
+        killItem(b);   // v3.3: any selection closes the pane
+      } else if (row.k === "file") {
+        openFileByKind(b.froot, row.rel, row.t, row.kk, b);
         killItem(b);   // v3.3: any selection closes the pane
       }
       return;
@@ -1903,7 +2006,11 @@ async function openPanel(card) {
   if (items.some(i => i.type === "panel" && i.def === card.def)) return;
   let text = "(couldn't load the note)";
   try {
-    const r = await fetch("/note?f=" + encodeURIComponent(card.def.file));
+    // THE FILES BROWSER (Task 16): a files-root .md file carries its own
+    // fetch URL (fsrc) since /note is jailed to the configured NOTES
+    // orbs only — an ordinary note card never sets this, so it keeps
+    // fetching through /note exactly as before.
+    const r = await fetch(card.def.fsrc || ("/note?f=" + encodeURIComponent(card.def.file)));
     if (r.ok) text = await r.text();
   } catch (e) {}
   const el = document.createElement("div");
@@ -1916,6 +2023,174 @@ async function openPanel(card) {
               ox: 0, oy: 0, flying: false, stretch: null, scrollY: 0,
               body: el.querySelector(".scroll") };
   items.push(p);
+}
+
+// ---- THE FILES BROWSER (Task 16): browse anything, open anything.
+// One /files listing per directory (lazy, not the notes whole-tree walk),
+// typed rows, tap-to-open dispatch by server-reported kind.
+function fileURL(root, rel) {
+  return "/file?root=" + root + "&rel=" + encodeURIComponent(rel);
+}
+
+function extOf(rel) {
+  const base = String(rel || "").split("/").pop();
+  const i = base.lastIndexOf(".");
+  return i > 0 ? base.slice(i).toLowerCase() : "";
+}
+
+// mirrors server.py's _KIND_EXT — the AI's open_file command only carries
+// root/rel, not a kind, so the client classifies the same way the server
+// does (the server's classification is what actually governs /file).
+const FILE_EXT_KIND = (() => {
+  const map = {
+    md: [".md", ".markdown"],
+    text: [".txt", ".log", ".csv", ".tsv", ".json", ".yaml", ".yml", ".xml",
+           ".ini", ".cfg", ".conf", ".toml", ".env"],
+    code: [".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".c", ".h",
+           ".hpp", ".cpp", ".cc", ".rs", ".go", ".java", ".rb", ".sh",
+           ".bash", ".zsh", ".fish", ".css", ".scss", ".html", ".htm",
+           ".sql", ".php", ".swift", ".kt", ".lua", ".pl", ".r", ".m",
+           ".vue", ".svelte"],
+    pdf: [".pdf"],
+    image: [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".avif"],
+    video: [".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"],
+    audio: [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"],
+    model: [".glb", ".gltf"],
+    archive: [".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar"],
+  };
+  const out = {};
+  for (const k in map) for (const e of map[k]) out[e] = k;
+  return out;
+})();
+
+function stageNear(it, near) {
+  it.x = near ? Math.min(near.x + 480, innerWidth - 240) : innerWidth * 0.5;
+  it.y = near ? near.y : innerHeight * 0.42;
+  it.anim = { k: "in", t: 0 }; it.el.style.opacity = "0.05";
+  items.push(it);
+}
+
+function openFileByKind(root, rel, name, kind, near) {
+  const url = fileURL(root, rel);
+  if (kind === "md") {
+    openPanel({ def: { file: root + "/" + rel, title: name, fsrc: url } });
+  } else if (kind === "text" || kind === "code") {
+    openTextPanel(url, name);
+  } else if (kind === "pdf") {
+    openPdfPanel(root, rel, name);
+  } else if (kind === "image") {
+    stageNear(makeImage(url, name), near);
+  } else if (kind === "model") {
+    stageNear(makeModel(url, name), near);
+  } else if (kind === "video" || kind === "audio") {
+    stageNear(makeMedia(url, name, kind), near);
+  } else {
+    stageNear(makeCard({ title: name, body: "can't preview this file type" }), near);
+  }
+}
+
+const TEXT_CAP = 200 * 1024;
+function escPre(t) {
+  return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function textBody(t) {
+  return t.length > TEXT_CAP ? escPre(t.slice(0, TEXT_CAP)) + "\n…truncated"
+                              : escPre(t);
+}
+
+async function openTextPanel(url, name) {
+  let text = "(couldn't load the file)";
+  try { const r = await fetch(url); if (r.ok) text = await r.text(); } catch (e) {}
+  const el = document.createElement("div");
+  el.className = "panel textview";
+  el.innerHTML = `<div class="bar"><h3>${escT(name)}</h3></div>` +
+                 `<div class="body"><div class="scroll">${textBody(text)}</div></div>`;
+  BEHIND.appendChild(el);
+  const p = { el, id: UID++, type: "panel",
+              def: { file: name, fsrc: url, ptype: "text" },
+              x: innerWidth * 0.5, y: innerHeight * 0.44, scale: 1, vx: 0, vy: 0,
+              grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null,
+              scrollY: 0, body: el.querySelector(".scroll") };
+  items.push(p);
+}
+
+// ---- THE PDF PANEL: pdf.js renders page 1 to a canvas lazily, caching
+// the last 3 pages per document so paging back is instant. Page state
+// (page/pages) lives on the tracker item and travels through pushState
+// so the scroll_note command AND the hand-scroll gesture can turn pages
+// (see applyCmds' scroll_note branch and the held.mode==="scroll" drag
+// handler), and so the render page mirrors whichever page is showing.
+const PDFSTATE = new Map();   // item id -> { doc, cache: Map<page, canvas> }
+
+async function pdfEnsureDoc(id, root, rel) {
+  let st = PDFSTATE.get(id);
+  if (st) return st;
+  st = { doc: null, cache: new Map() };
+  PDFSTATE.set(id, st);
+  try { st.doc = await pdfjsLib.getDocument(fileURL(root, rel)).promise; }
+  catch (e) { st.err = true; }
+  return st;
+}
+
+async function pdfDrawPage(canvas, id, root, rel, page) {
+  const st = await pdfEnsureDoc(id, root, rel);
+  if (!st.doc) return null;
+  const pages = st.doc.numPages;
+  page = Math.max(1, Math.min(pages, page || 1));
+  let off = st.cache.get(page);
+  if (!off) {
+    const pg = await st.doc.getPage(page);
+    const vp0 = pg.getViewport({ scale: 1 });
+    const scale = 1000 / vp0.width;             // a sensible ~1000px width
+    const vp = pg.getViewport({ scale });
+    off = document.createElement("canvas");
+    off.width = Math.round(vp.width); off.height = Math.round(vp.height);
+    await pg.render({ canvasContext: off.getContext("2d"), viewport: vp }).promise;
+    st.cache.set(page, off);
+    if (st.cache.size > 3) {                    // cache the last 3 pages
+      for (const k of st.cache.keys()) { if (k !== page) { st.cache.delete(k); break; } }
+    }
+  }
+  canvas.width = off.width; canvas.height = off.height;
+  canvas.getContext("2d").drawImage(off, 0, 0);
+  return { page, pages };
+}
+
+function pdfCleanup(id) { PDFSTATE.delete(id); }
+
+async function openPdfPanel(root, rel, name) {
+  const el = document.createElement("div");
+  el.className = "panel pdfview";
+  el.innerHTML = `<div class="bar"><h3>${escT(name)}</h3></div>` +
+                 `<div class="body"><div class="scroll"><canvas></canvas></div></div>`;
+  BEHIND.appendChild(el);
+  const p = { el, id: UID++, type: "panel",
+              def: { root, rel, title: name, ptype: "pdf", file: root + "/" + rel },
+              x: innerWidth * 0.5, y: innerHeight * 0.44, scale: 1, vx: 0, vy: 0,
+              grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null,
+              scrollY: 0, body: el.querySelector(".scroll"), page: 1, pages: 0 };
+  items.push(p);
+  pdfShowPage(p, 1);
+}
+
+async function pdfShowPage(p, n) {
+  const canvas = p.el.querySelector("canvas");
+  if (!canvas) return;
+  const res = await pdfDrawPage(canvas, p.id, p.def.root, p.def.rel, n);
+  const h3 = p.el.querySelector(".bar h3");
+  if (res) {
+    p.page = res.page; p.pages = res.pages;
+    if (h3) h3.textContent = `${p.def.title} · ${p.page}/${p.pages}`;
+  } else if (h3) {
+    h3.textContent = p.def.title + " — couldn't load";
+  }
+}
+
+function pdfGoPage(p, dir) {
+  if (!p || p.def.ptype !== "pdf") return false;
+  const n = dir === "top" ? 1 : (p.page || 1) + (dir === "up" ? -1 : 1);
+  pdfShowPage(p, n);
+  return true;
 }
 
 function toast(msg, ms = 2500) {
@@ -2755,7 +3030,10 @@ function physics(dt) {
         const p = Math.min(a.t / 0.35, 1);
         c.inS = 1 - 0.7 * p * p;
         c.el.style.opacity = String(1 - p);
-        if (p >= 1) { c.el.remove(); c.anim = null; }
+        if (p >= 1) {
+          c.el.remove(); c.anim = null;
+          if (c.def && c.def.ptype === "pdf") pdfCleanup(c.id);
+        }
       } else if (a.k === "yank") {    // grip-fight shake, then ripped away
         if (a.t < 0.18) {
           c.jx = (Math.random() - 0.5) * 14; c.jy = (Math.random() - 0.5) * 14;
@@ -4105,6 +4383,32 @@ async function boot() {
             // v3 (Jared's ruling 2026-08-14): the two-hand TWIST-ROLL is
             // dead — two hands = carry + SCALE only; all rotation lives
             // in the one-hand hold-still latch.
+          } else if (held.mode === "scroll" && held.grabbedBy[0] === i &&
+                     held.type === "panel" && held.def.ptype === "pdf") {
+            // THE FILES BROWSER (Task 16): the SAME drag that scrolls a
+            // note TURNS PAGES on a PDF panel — a threshold-crossing
+            // re-anchors instead of a continuous scrollY, everything
+            // else (the hold-to-move promotion) is untouched
+            const dy = cur.y - held.grabY0;
+            if (Math.abs(dy) > 90) {
+              pdfGoPage(held, dy < 0 ? "down" : "up");
+              held.grabY0 = cur.y;
+            }
+            const pdrift = Math.hypot(cur.x - held.holdX, cur.y - held.holdY);
+            if (pdrift > 80) {
+              held.holdX = cur.x; held.holdY = cur.y;
+              held.holdT = performance.now(); held.hch = 0;
+              held.grabY0 = cur.y;
+            } else {
+              const pp = Math.min((performance.now() - held.holdT) / 1000, 1);
+              held.hch = pp;
+              if (pp >= 1) {
+                held.mode = "move";
+                held.ox = held.x - cur.x; held.oy = held.y - cur.y;
+                held.holdX = cur.x; held.holdY = cur.y;
+                held.holdT = performance.now(); held.hch = 0.6;
+              }
+            }
           } else if (held.mode === "scroll" && held.grabbedBy[0] === i) {
             // scrolling (content follows the finger) + the hold-to-move
             // promotion timer running underneath
@@ -4439,7 +4743,9 @@ function pushState(now) {
         title: i.type === "panel"
                ? i.def.file.split("/").pop().replace(".md", "") : i.def.title,
         body: (i.type === "card" || i.type === "orb") ? i.def.body : undefined,
-        src: (i.type === "img" || i.type === "model") ? i.def.src : undefined,
+        src: (i.type === "img" || i.type === "model" || i.type === "media")
+             ? i.def.src : undefined,
+        mk: i.type === "media" ? i.def.mkind : undefined,
         w: i.type === "widget" ? i.def.w : undefined,
         mm: i.type === "model" ? i.def.mmode : undefined,
         lf: i.type === "model" ? i.def.lift : undefined,
@@ -4451,6 +4757,15 @@ function pushState(now) {
         rv: i.type === "browser" ? i.rowsV : undefined,
         fi: i.type === "browser" ? i.flashI : undefined,
         fv: i.type === "browser" ? i.flashV : undefined,
+        // THE FILES BROWSER's PDF panel (Task 16): ptype distinguishes a
+        // note/text/pdf panel; pg/pgs mirror the current page so the
+        // render page redraws only on an actual change (like rv/fv)
+        ptype: i.type === "panel" ? (i.def.ptype || "note") : undefined,
+        fsrc: i.type === "panel" ? i.def.fsrc : undefined,
+        proot: i.type === "panel" && i.def.ptype === "pdf" ? i.def.root : undefined,
+        prel: i.type === "panel" && i.def.ptype === "pdf" ? i.def.rel : undefined,
+        pg: i.type === "panel" && i.def.ptype === "pdf" ? i.page : undefined,
+        pgs: i.type === "panel" && i.def.ptype === "pdf" ? i.pages : undefined,
         fxf: i.def.fx ? 1 : undefined,
         vd: i.def.vid ? 1 : undefined,
         file: i.def.file,
@@ -4557,16 +4872,31 @@ async function renderLoop() {
           el = document.createElement("div");
           el.className = "card";
           el.innerHTML = `<h3>${escT(it.title)}</h3><p>${escT(it.body || "")}</p>`;
+        } else if (it.type === "media") {
+          // THE FILES BROWSER (Task 16): a played-back video/audio file,
+          // controls and all — mirrored the same way an img card is.
+          el = document.createElement("div");
+          el.className = "card mediacard";
+          el.innerHTML = `<h3>${escT(it.title)}</h3>` +
+            (it.mk === "audio"
+              ? `<audio src="${escT(it.src)}" controls preload="metadata"></audio>`
+              : `<video src="${escT(it.src)}" controls preload="metadata" playsinline></video>`);
         } else {
           el = document.createElement("div");
-          el.className = "panel";
-          el.innerHTML =
-            `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
-            `<div class="body"><div class="scroll">loading…</div></div>`;
-          fetch("/note?f=" + encodeURIComponent(it.file))
-            .then(r => r.ok ? r.text() : "(unavailable)")
-            .then(t => { const s = el.querySelector(".scroll");
-                         if (s) s.innerHTML = renderNote(t); });
+          if (it.ptype === "pdf") {
+            el.className = "panel pdfview";
+            el.innerHTML = `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
+                           `<div class="body"><div class="scroll"><canvas></canvas></div></div>`;
+          } else {
+            el.className = "panel" + (it.ptype === "text" ? " textview" : "");
+            el.innerHTML =
+              `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
+              `<div class="body"><div class="scroll">loading…</div></div>`;
+            fetch(it.fsrc || ("/note?f=" + encodeURIComponent(it.file)))
+              .then(r => r.ok ? r.text() : "(unavailable)")
+              .then(t => { const s = el.querySelector(".scroll");
+                           if (s) s.innerHTML = it.ptype === "text" ? textBody(t) : renderNote(t); });
+          }
         }
         BEHIND.appendChild(el);
         ri = rItems[it.id] = { el, x: rx(it.x) * innerWidth,
@@ -4578,6 +4908,7 @@ async function renderLoop() {
             .then(sc => { ri.msc = sc; });
         if (it.type === "widget" && it.w === "ring")
           RINGS.set(it.id, ringCanvas(el));   // the ring animates locally
+        if (it.ptype === "pdf") ri.pdfPage = 0;   // force the first draw below
       }
       ri.x += (rx(it.x) * innerWidth - ri.x) * 0.5;
       ri.y += (it.y * innerHeight - ri.y) * 0.5;
@@ -4606,6 +4937,14 @@ async function renderLoop() {
       if (it.type === "browser" && it.fv && it.fv !== ri.fv) {
         ri.fv = it.fv;                 // the tap flash, mirrored on air
         flashRow(ri.el.querySelector(".scroll"), it.fi);
+      }
+      if (it.ptype === "pdf" && it.pg && it.pg !== ri.pdfPage) {
+        ri.pdfPage = it.pg;
+        const canvas = ri.el.querySelector("canvas");
+        if (canvas) pdfDrawPage(canvas, it.id, it.proot, it.prel, it.pg).then(res => {
+          const h3 = ri.el.querySelector(".bar h3");
+          if (res && h3) h3.textContent = `${it.title} · ${res.page}/${res.pages}`;
+        });
       }
       if (it.type === "model" && ri.msc && ri.msc.group) {
         if (ri.mry == null) { ri.mrx = it.rx || 0; ri.mry = it.ry || 0;
@@ -4651,6 +4990,7 @@ async function renderLoop() {
     Object.keys(rItems).forEach(k => {
       if (!ids.has(+k)) {
         if (rItems[k].msc) disposeScene(rItems[k].msc);
+        if (rItems[k].pdfPage != null) pdfCleanup(+k);
         rItems[k].el.remove(); delete rItems[k]; } });
     renderRings();               // the ring draws its own frames
   } catch (e) {}

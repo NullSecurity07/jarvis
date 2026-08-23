@@ -42,6 +42,9 @@ Endpoints:
   GET  /tree?orb=N             a notes orb's folder tree — read-only, JAILED
   GET  /note?f=N/<rel>         one note's text — read-only, JAILED
   GET  /props                  the media airlock as a browsable tree
+  GET  /files?root=N&rel=<rel> a files-root directory listing — JAILED
+  GET  /file?root=N&rel=<rel>  streams one file — JAILED, read-only,
+                               range-request aware, capped at files.maxBytes
   GET  /orb                    your assistant's live state (the ring reads it)
   GET  /cam                    live V4L2 camera controls (Linux; the light
   POST /cam                    governor + camera clinic set them here)
@@ -58,6 +61,13 @@ no restart needed):
 just a folder of markdown). The "media" orb is always the repo's ./media
 folder — the airlock: the only place images/models ever stage from.
 
+"files" (optional) adds one browser orb per configured root, for anything
+else — PDFs, code, archives, whatever is on disk:
+  "files": { "roots": [ { "title": "Home", "path": "~" } ],
+             "maxBytes": 52428800 }
+(absent key = a single "Home" root at ~, 50MB cap). Read-only, jailed to
+those roots exactly like a notes orb — the user opts in by naming a root.
+
 Your AI drives the ring by writing tiny files into ./state/ :
   state/state      one word: idle | listening | thinking | speaking
   state/mood.json  {"mood": "green"|"amber"|"red", "ts": <unix time>}
@@ -66,6 +76,7 @@ Missing files are fine — the ring just idles.
 """
 import collections
 import json
+import mimetypes
 import re
 import shutil
 import subprocess
@@ -103,6 +114,14 @@ def _read_config():
         ]
     for orb in cfg["orbs"]:
         orb["path"] = str(Path(str(orb.get("path", ""))).expanduser())
+    files = cfg.get("files") if isinstance(cfg.get("files"), dict) else {}
+    if not files.get("roots"):
+        files["roots"] = [{"title": "Home", "path": "~"}]
+    if not files.get("maxBytes"):
+        files["maxBytes"] = 52428800
+    for r in files["roots"]:
+        r["path"] = str(Path(str(r.get("path", ""))).expanduser())
+    cfg["files"] = files
     return cfg
 
 
@@ -132,6 +151,70 @@ def orb_root(i):
         return None
 
 
+def files_root(i):
+    """Resolve a files-browser root's jail root, or None."""
+    try:
+        r = config()["files"]["roots"][int(i)]
+        p = Path(r["path"])
+        if not p.is_absolute():
+            p = HERE / p
+        return p.resolve()
+    except Exception:
+        return None
+
+
+def _jail_resolve(root, rel):
+    """rel resolved against root -> the resolved Path, or None unless it
+    lands AT or INSIDE root (symlink escapes rejected by comparing the
+    RESOLVED paths, not the textual ones — shared by /note, /files, /file
+    and the open_file command)."""
+    if root is None:
+        return None
+    try:
+        target = (root / str(rel or "")).resolve()
+    except Exception:
+        return None
+    if target != root and root not in target.parents:
+        return None
+    return target
+
+
+# ---- THE FILES BROWSER's kind classifier (extension -> a coarse type the
+# page renders differently): explicit lists, not a library sniff — this
+# never opens the file, so a renamed binary just lands in "other".
+_KIND_EXT = {
+    "md": {".md", ".markdown"},
+    "text": {".txt", ".log", ".csv", ".tsv", ".json", ".yaml", ".yml",
+             ".xml", ".ini", ".cfg", ".conf", ".toml", ".env"},
+    "code": {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".c",
+              ".h", ".hpp", ".cpp", ".cc", ".rs", ".go", ".java", ".rb",
+              ".sh", ".bash", ".zsh", ".fish", ".css", ".scss", ".html",
+              ".htm", ".sql", ".php", ".swift", ".kt", ".lua", ".pl",
+              ".r", ".m", ".vue", ".svelte"},
+    "pdf": {".pdf"},
+    "image": {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg",
+              ".avif"},
+    "video": {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"},
+    "audio": {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"},
+    "model": {".glb", ".gltf"},
+    "archive": {".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z",
+                ".rar"},
+}
+_EXT_KIND = {ext: k for k, exts in _KIND_EXT.items() for ext in exts}
+
+
+def kind_of(ext):
+    return _EXT_KIND.get(ext.lower(), "other")
+
+
+def ctype_of(kind, name):
+    if kind == "pdf":
+        return "application/pdf"
+    if kind in ("text", "code", "md"):
+        return "text/plain; charset=utf-8"
+    return mimetypes.guess_type(name)[0] or "application/octet-stream"
+
+
 def cam_dev():
     return str(config().get("camera_dev", "/dev/video0"))
 
@@ -153,7 +236,8 @@ _ACK_EV = threading.Condition(_LOCK)
 _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
             "yank", "hover", "scroll_note", "widget", "explode", "assemble",
             "present", "clinic", "light", "reload", "dump",
-            "enroll", "guest", "lock")          # THE OWNER LOCK
+            "enroll", "guest", "lock",          # THE OWNER LOCK
+            "open_file")                        # THE FILES BROWSER
 _MAX_QUEUE = 256        # a hidden board must not grow a silent backlog forever
 
 # ---- THE BOARD FILE: what is on the glass, persisted so a reload (or a
@@ -469,6 +553,16 @@ class Handler(SimpleHTTPRequestHandler):
                             raise ValueError("not in the media airlock")
                         target = hits[0]
                     cmd["src"] = "/media/" + target.relative_to(media).as_posix()
+                elif cmd["a"] == "open_file":
+                    # THE FILES BROWSER, staged by the assistant: jailed
+                    # exactly like a user tap — resolve, then require the
+                    # configured root to be an ancestor (or the file itself)
+                    root = files_root(cmd.get("root"))
+                    target = _jail_resolve(root, cmd.get("rel"))
+                    if target is None or not target.is_file():
+                        raise ValueError("not in a configured files root")
+                    cmd["root"] = int(cmd["root"])
+                    cmd["rel"] = target.relative_to(root).as_posix()
             except Exception:
                 self._json({"err": "rejected: unknown action or file "
                                    "outside the media airlock"}, 400)
@@ -507,12 +601,19 @@ class Handler(SimpleHTTPRequestHandler):
         cfg = config()
         if path == "/config":
             # the page builds its ring name + orb bloom from this, and
-            # takes its camera defaults (res / fps) unless the URL says
+            # takes its camera defaults (res / fps) unless the URL says.
+            # Files roots append AFTER the notes/media orbs (their array
+            # position is untouched — /tree?orb=N and /note?f=N/... still
+            # index by that position) each carrying its OWN "root" index
+            # into cfg["files"]["roots"] for /files and /file.
+            orbs = [{"title": o.get("title", "?"),
+                     "kind": o.get("kind", "notes")} for o in cfg["orbs"]]
+            for i, r in enumerate(cfg.get("files", {}).get("roots", [])):
+                orbs.append({"title": r.get("title", "Files"),
+                             "kind": "files", "root": i})
             self._json({"name": cfg.get("name", "JARVIS"),
                         "res": cfg.get("res"), "fps": cfg.get("fps"),
-                        "orbs": [{"title": o.get("title", "?"),
-                                  "kind": o.get("kind", "notes")}
-                                 for o in cfg["orbs"]]})
+                        "orbs": orbs})
             return
         if path == "/tuning":
             # every hand-fitted number the stage reads at boot. Missing
@@ -594,6 +695,121 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception:
                 self._json({"name": "Props", "items": [], "dirs": []}, 500)
             return
+        if path == "/files":
+            # a files-root directory listing — one level, lazily paged by
+            # the page as it descends (unlike /tree, which walks a whole
+            # notes vault upfront: an arbitrary root can be huge). JAILED
+            # exactly like /note: resolve, then require the root to be an
+            # ancestor (or the dir itself) of the resolved target.
+            idx = (q.get("root") or ["0"])[0]
+            rel = (q.get("rel") or [""])[0]
+            root = files_root(idx)
+            target = _jail_resolve(root, rel)
+            if target is None or not target.is_dir():
+                self._json({"err": "not found"}, 404)
+                return
+            dirs, files = [], []
+            try:
+                for p in target.iterdir():
+                    if p.name.startswith("."):
+                        continue
+                    relp = p.relative_to(root).as_posix()
+                    if p.is_dir():
+                        dirs.append({"name": p.name, "rel": relp})
+                    elif p.is_file():
+                        try:
+                            st = p.stat()
+                        except OSError:
+                            continue
+                        files.append({"name": p.name, "rel": relp,
+                                      "ext": p.suffix.lower(),
+                                      "size": st.st_size,
+                                      "mtime": int(st.st_mtime),
+                                      "kind": kind_of(p.suffix)})
+            except OSError:
+                self._json({"err": "unreadable"}, 500)
+                return
+            dirs.sort(key=lambda d: d["name"].lower())
+            files.sort(key=lambda f: f["name"].lower())
+            rel_norm = "" if target == root else target.relative_to(root).as_posix()
+            up = None
+            if target != root:
+                parent = target.parent
+                up = "" if parent == root else parent.relative_to(root).as_posix()
+            title = None
+            try:
+                title = config()["files"]["roots"][int(idx)].get("title")
+            except Exception:
+                pass
+            self._json({"root": int(idx), "title": title, "rel": rel_norm,
+                        "up": up, "dirs": dirs, "files": files})
+            return
+        if path == "/file":
+            # streams one file — JAILED like /files, read-only, no exec.
+            # Real range support (206 + Content-Range): pdf.js and
+            # <video>/<audio> all issue Range requests, and without a real
+            # 206 they either refuse to play or refetch the whole file
+            # per seek.
+            idx = (q.get("root") or ["0"])[0]
+            rel = (q.get("rel") or [""])[0]
+            root = files_root(idx)
+            target = _jail_resolve(root, rel)
+            if target is None or not target.is_file():
+                self.send_response(404)
+                self.end_headers()
+                return
+            try:
+                size = target.stat().st_size
+            except OSError:
+                self.send_response(404)
+                self.end_headers()
+                return
+            max_bytes = int(cfg.get("files", {}).get("maxBytes", 52428800))
+            if size > max_bytes:
+                self.send_response(413)
+                self.end_headers()
+                return
+            ctype = ctype_of(kind_of(target.suffix), target.name)
+            start, end, status = 0, size - 1, 200
+            rng = self.headers.get("Range")
+            if rng:
+                m = re.match(r"bytes=(\d*)-(\d*)", rng)
+                if m and (m.group(1) or m.group(2)):
+                    if m.group(1):
+                        start = int(m.group(1))
+                        end = int(m.group(2)) if m.group(2) else size - 1
+                    else:
+                        start = max(0, size - int(m.group(2)))
+                        end = size - 1
+                    if size == 0 or start >= size or start > end:
+                        self.send_response(416)
+                        self.send_header("Content-Range", f"bytes */{size}")
+                        self.end_headers()
+                        return
+                    end = min(end, size - 1)
+                    status = 206
+            length = end - start + 1
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(length))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store")
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            try:
+                with open(target, "rb") as f:
+                    f.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = f.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         if path == "/orb":
             # the ring's heartbeat: your assistant's live state, read from
             # tiny files in ./state/. Every read fails soft — no files,
@@ -648,9 +864,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        target = (root / rel).resolve()
-        if (root not in target.parents) or target.suffix != ".md" \
-                or not target.is_file():
+        target = _jail_resolve(root, rel)
+        if target is None or target.suffix != ".md" or not target.is_file():
             self.send_response(404)
             self.end_headers()
             return

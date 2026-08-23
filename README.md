@@ -34,6 +34,24 @@ Tap the ring → orbs bloom → tap an orb → your files unfold on glass.
 - `fps`: `auto` | `fast` | `light` — the light governor's default (see below).
 - The server re-reads this file whenever it changes; no restart. (`R` on the board re-reads the notes folders.)
 
+## Browse your files
+
+A `files` orb browses any folder on disk — not just notes and the media airlock: PDFs, code, text, archives, anything. Add it to `jarvis.json`:
+
+```json
+"files": {
+  "roots": [
+    { "title": "Home",    "path": "~" },
+    { "title": "Desktop", "path": "~/Desktop" }
+  ],
+  "maxBytes": 52428800
+}
+```
+
+Missing the key entirely = one `Home` root at `~`, 50MB cap. Each root becomes its own orb; tap one and its folder listing unfolds the same glass pane as a notes orb, with an `..` row to go back up. Every row is tagged with its kind (`PDF`, `IMG`, `TXT`, `MP4`, …) and opens accordingly: markdown in the note panel, text/code in a monospace panel (capped at 200KB), images as 3D reliefs, PDFs in a pdf.js panel (the same scroll gesture that pages a note turns PDF pages), video/audio in a controls card, `.glb`/`.gltf` as a hologram, anything else as a plain "here's what this is" card — nothing unrecognized ever gets dumped raw into the page.
+
+**Read-only.** The server only ever opens files for reading, jailed to the configured roots exactly like a notes orb (symlink escapes and `..` are rejected by resolving the real path and checking it's still inside the root) — there is no write, delete, or execute path anywhere in `/files` or `/file`. A root you don't add is never reachable; you're opting a folder in by naming it here.
+
 ## Tuning — `tuning.json`
 
 Every gesture and camera number the board uses lives in `tuning.json` and is read at boot (`GET /tuning`): detector confidences, the One-Euro smoothing, the pinch's three signatures and its touch ceilings, the world lane, tap/fling feel, claw timing, clap, the light governor. Edit it, then `bin/board.sh '{"a":"reload"}'`. Each block's `_` string says what the numbers mean and what they were fitted from. The method for fitting them to a hand is in [TROUBLESHOOTING.md](TROUBLESHOOTING.md) (the P sampler, the K clinic, the tape + `tools/replay.py`).
@@ -47,7 +65,7 @@ Keys on the tracker: `D` debug overlay · `P` pose sampler · `K` camera clinic 
 ## Wire in an AI
 
 - **The ring is a face.** Write `thinking` / `idle` / `listening` / `speaking` to `state/state` and the ring reacts (`state/mood.json`, `state/wave.json` optional; format at the top of `server.py`). Claude Code: a `UserPromptSubmit` hook writing `thinking` and a `Stop` hook writing `idle`.
-- **The board is a stage.** `bin/board.sh '{"a":"present","title":"THE PLAN","body":"..."}'` flies it center stage, spotlit. Also `add_card`, `add_img`/`hand` (`"src":"misc/x.png"` from the airlock), `explode`, `assemble`, `yank`, `hover`, `reset`, `clear`, `clinic`, `light`, `dump`, `reload`. The server enforces the action allowlist and the media jail. `board.sh` prints **`landed #id`** when the tracker actually applied the command, or `queued` with the board's freshness (`--wait ms` to block longer).
+- **The board is a stage.** `bin/board.sh '{"a":"present","title":"THE PLAN","body":"..."}'` flies it center stage, spotlit. Also `add_card`, `add_img`/`hand` (`"src":"misc/x.png"` from the airlock), `open_file` (`{"root":0,"rel":"notes/todo.txt"}` — opens a file from a configured [files root](#browse-your-files), jailed the same way a tap is), `explode`, `assemble`, `yank`, `hover`, `reset`, `clear`, `clinic`, `light`, `dump`, `reload`. The server enforces the action allowlist and the media jail. `board.sh` prints **`landed #id`** when the tracker actually applied the command, or `queued` with the board's freshness (`--wait ms` to block longer).
 - **`bin/board-state.sh`** prints what is on the board right now.
 - **`GET /state`** → `perf` (fps, inference ms, camera governor, clinic table), cursors, items, `ack`.
 
