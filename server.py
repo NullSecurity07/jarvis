@@ -45,6 +45,10 @@ Endpoints:
   GET  /files?root=N&rel=<rel> a files-root directory listing — JAILED
   GET  /file?root=N&rel=<rel>  streams one file — JAILED, read-only,
                                range-request aware, capped at files.maxBytes
+  GET  /desks                  live i3 workspaces + windows — desks.enabled
+  GET  /desks/shot?xid=N       one PNG frame of a live window (maim)
+  GET  /desks/stream?xid=N     that window as multipart/x-mixed-replace
+  POST /desks/cmd              an i3-command allowlist (focus/move/etc), never kill
   GET  /orb                    your assistant's live state (the ring reads it)
   GET  /cam                    live V4L2 camera controls (Linux; the light
   POST /cam                    governor + camera clinic set them here)
@@ -67,6 +71,16 @@ else — PDFs, code, archives, whatever is on disk:
              "maxBytes": 52428800 }
 (absent key = a single "Home" root at ~, 50MB cap). Read-only, jailed to
 those roots exactly like a notes orb — the user opts in by naming a root.
+
+"desks" (optional, i3/X11 only) turns the board into a live view of your
+own machine — every workspace and window becomes something you can put
+on the glass:
+  "desks": { "enabled": true, "fps": 4, "minGapMs": 180, "maxStreams": 3,
+             "display": ":0", "xauthority": "/run/user/1000/lyxauth" }
+(absent key = disabled; every /desks* endpoint 404s). Read-only w.r.t.
+your windows except an allowlist of i3 commands the page can send
+(focus/workspace/move/layout/fullscreen — never kill); captures never
+leave localhost, and the board's own window is always excluded.
 
 Your AI drives the ring by writing tiny files into ./state/ :
   state/state      one word: idle | listening | thinking | speaking
@@ -122,6 +136,26 @@ def _read_config():
     for r in files["roots"]:
         r["path"] = str(Path(str(r.get("path", ""))).expanduser())
     cfg["files"] = files
+    desks = cfg.get("desks") if isinstance(cfg.get("desks"), dict) else {}
+    desks.setdefault("enabled", False)
+    desks.setdefault("fps", 4)
+    desks.setdefault("minGapMs", 180)
+    desks.setdefault("maxStreams", 3)
+    desks.setdefault("display", ":0")
+    desks.setdefault("xauthority", "/run/user/1000/lyxauth")
+    try:
+        desks["fps"] = max(1, min(10, int(desks["fps"])))
+    except Exception:
+        desks["fps"] = 4
+    try:
+        desks["minGapMs"] = max(0, int(desks["minGapMs"]))
+    except Exception:
+        desks["minGapMs"] = 180
+    try:
+        desks["maxStreams"] = max(1, min(10, int(desks["maxStreams"])))
+    except Exception:
+        desks["maxStreams"] = 3
+    cfg["desks"] = desks
     return cfg
 
 
@@ -215,6 +249,125 @@ def ctype_of(kind, name):
     return mimetypes.guess_type(name)[0] or "application/octet-stream"
 
 
+# ---- THE DESKS: your own machine's windows on the glass (i3/X11 only).
+# Read-only w.r.t. your windows except an allowlist of i3 commands sent as
+# a LIST of argv (i3-msg joins them with a space itself — "i3-msg border
+# normal" is documented as equivalent to "i3-msg 'border normal'") —
+# never shell=True, never an interpolated string. kill is not in the
+# allowlist: closing the user's windows by gesture isn't something to
+# ship untested overnight.
+_I3_MSG = "/usr/sbin/i3-msg"
+_DESK_EXCLUDE_CLASS = {"polybar"}
+_DESK_LOCK = threading.Lock()
+_DESK_CACHE = {}          # xid -> {"t": monotonic, "png": bytes}
+_DESK_STREAMS = 0         # concurrent /desks/stream connections
+
+
+def _desks_int(v):
+    """int(v), but never through bool (True/False ARE ints in Python) —
+    the same numeric-field discipline owner_validate uses above."""
+    if isinstance(v, bool):
+        return None
+    try:
+        return int(v)
+    except Exception:
+        return None
+
+
+def _desks_env():
+    d = config().get("desks", {})
+    import os
+    env = dict(os.environ)
+    env["DISPLAY"] = str(d.get("display", ":0"))
+    env["XAUTHORITY"] = str(d.get("xauthority", "/run/user/1000/lyxauth"))
+    return env
+
+
+def _i3(*args):
+    """i3-msg <args...> (argv list, never shell) -> parsed JSON, or None."""
+    try:
+        r = subprocess.run([_I3_MSG, *args], capture_output=True, text=True,
+                           timeout=3, env=_desks_env())
+        return json.loads(r.stdout) if r.stdout else None
+    except Exception:
+        return None
+
+
+def _desks_snapshot():
+    """{"ws":[{"num","name","visible","focused"}],
+    "wins":[{"cid","xid","ws","cls","title","w","h","focused","visible"}]}
+    from get_workspaces + get_tree. The board's own window (title exactly
+    "jarvis", or a Google-chrome window titled "jarvis") and Polybar are
+    excluded so the glass never mirrors itself into infinity. Never
+    raises — an i3-msg failure just yields an empty board."""
+    ws_raw = _i3("-t", "get_workspaces") or []
+    tree = _i3("-t", "get_tree")
+    ws = [{"num": w.get("num"), "name": w.get("name"),
+           "visible": bool(w.get("visible")), "focused": bool(w.get("focused"))}
+          for w in ws_raw if isinstance(w, dict)]
+    vis_by_num = {w["num"]: w["visible"] for w in ws}
+    wins = []
+
+    def walk(n, cur_ws):
+        ws_num = n.get("num") if n.get("type") == "workspace" else cur_ws
+        win = n.get("window")
+        if win:
+            props = n.get("window_properties") or {}
+            cls = props.get("class") or ""
+            title = n.get("name") or ""
+            is_board = title == "jarvis" or (cls == "Google-chrome" and title == "jarvis")
+            if not is_board and cls.lower() not in _DESK_EXCLUDE_CLASS:
+                rect = n.get("rect") or {}
+                wins.append({"cid": n.get("id"), "xid": win, "ws": ws_num,
+                            "cls": cls, "title": title,
+                            "w": rect.get("width"), "h": rect.get("height"),
+                            "focused": bool(n.get("focused")),
+                            "visible": bool(vis_by_num.get(ws_num))})
+        for c in n.get("nodes", []) + n.get("floating_nodes", []):
+            walk(c, ws_num)
+    if isinstance(tree, dict):
+        walk(tree, None)
+    return {"ws": ws, "wins": wins}
+
+
+def _desks_valid_ws_ref(ref, snap):
+    if isinstance(ref, bool):
+        return False
+    if isinstance(ref, int):
+        return any(w["num"] == ref for w in snap["ws"])
+    if isinstance(ref, str) and ref:
+        return any(w["name"] == ref for w in snap["ws"])
+    return False
+
+
+def _desks_capture(xid):
+    """maim -i <xid> -f png /dev/stdout -> (png_bytes_or_None, ok). Cached
+    per-xid for desks.minGapMs so a burst of shot/stream hits on the same
+    window doesn't restart the ~70ms capture on every request. ok=False
+    means the FRESH capture failed — png is the last good frame if one
+    was ever captured, else None (the caller turns that into a 503)."""
+    gap = int(config().get("desks", {}).get("minGapMs", 180)) / 1000
+    now = time.monotonic()
+    with _DESK_LOCK:
+        c = _DESK_CACHE.get(xid)
+        if c and now - c["t"] < gap:
+            return c["png"], True
+    png = None
+    try:
+        r = subprocess.run(["maim", "-i", str(xid), "-f", "png", "/dev/stdout"],
+                           capture_output=True, timeout=3, env=_desks_env())
+        if r.returncode == 0 and r.stdout[:8] == b"\x89PNG\r\n\x1a\n":
+            png = r.stdout
+    except Exception:
+        png = None
+    with _DESK_LOCK:
+        if png:
+            _DESK_CACHE[xid] = {"t": now, "png": png}
+            return png, True
+        c = _DESK_CACHE.get(xid)
+        return (c["png"] if c else None), False
+
+
 def cam_dev():
     return str(config().get("camera_dev", "/dev/video0"))
 
@@ -237,7 +390,8 @@ _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
             "yank", "hover", "scroll_note", "widget", "explode", "assemble",
             "present", "clinic", "light", "reload", "dump",
             "enroll", "guest", "lock",          # THE OWNER LOCK
-            "open_file")                        # THE FILES BROWSER
+            "open_file",                        # THE FILES BROWSER
+            "desk")                             # THE DESKS
 _MAX_QUEUE = 256        # a hidden board must not grow a silent backlog forever
 
 # ---- THE BOARD FILE: what is on the glass, persisted so a reload (or a
@@ -563,6 +717,25 @@ class Handler(SimpleHTTPRequestHandler):
                         raise ValueError("not in a configured files root")
                     cmd["root"] = int(cmd["root"])
                     cmd["rel"] = target.relative_to(root).as_posix()
+                elif cmd["a"] == "desk":
+                    # THE DESKS, staged by the assistant: same jail as a
+                    # user tap — every xid/ws must exist in the CURRENT
+                    # i3 tree, checked fresh (not cached) right here.
+                    if not config().get("desks", {}).get("enabled"):
+                        raise ValueError("desks disabled")
+                    snap = _desks_snapshot()
+                    xid = _desks_int(cmd.get("xid")) if "xid" in cmd else None
+                    ws = cmd.get("ws") if "ws" in cmd else None
+                    if xid is not None:
+                        if not any(w["xid"] == xid for w in snap["wins"]):
+                            raise ValueError("unknown xid")
+                        cmd["xid"] = xid
+                    elif ws is not None:
+                        if not _desks_valid_ws_ref(ws, snap):
+                            raise ValueError("unknown workspace")
+                        cmd["ws"] = ws
+                    else:
+                        raise ValueError("desk needs xid or ws")
             except Exception:
                 self._json({"err": "rejected: unknown action or file "
                                    "outside the media airlock"}, 400)
@@ -592,6 +765,58 @@ class Handler(SimpleHTTPRequestHandler):
             self._json({"id": cid, "landed": landed, "board": status,
                         "age": None if age is None else round(age, 1)})
             return
+        if path == "/desks/cmd":
+            # THE DESKS' control channel: an i3-command ALLOWLIST, never
+            # free-form text — kill is not here (v1 never closes the
+            # user's windows by gesture). Every numeric field is
+            # validated as an int and every cid/ws must exist in the
+            # CURRENT i3 tree, fetched fresh for this request.
+            if not config().get("desks", {}).get("enabled"):
+                self.send_response(404)
+                self.end_headers()
+                return
+            try:
+                cmd = json.loads(body)
+                a = cmd.get("a")
+                assert a in ("workspace", "focus", "move", "layout", "fullscreen")
+                snap = _desks_snapshot()
+                if a == "workspace":
+                    n = cmd.get("n")
+                    if not _desks_valid_ws_ref(n, snap):
+                        raise ValueError("unknown workspace")
+                    _i3("workspace", "number", str(n)) if isinstance(n, int) \
+                        else _i3("workspace", str(n))
+                elif a == "focus":
+                    cid = _desks_int(cmd.get("cid"))
+                    if cid is None or not any(w["cid"] == cid for w in snap["wins"]):
+                        raise ValueError("unknown cid")
+                    _i3(f"[con_id={cid}]", "focus")
+                elif a == "move":
+                    cid = _desks_int(cmd.get("cid"))
+                    ws = cmd.get("ws")
+                    if cid is None or not any(w["cid"] == cid for w in snap["wins"]):
+                        raise ValueError("unknown cid")
+                    if not _desks_valid_ws_ref(ws, snap):
+                        raise ValueError("unknown workspace")
+                    dest = "number " + str(ws) if isinstance(ws, int) else str(ws)
+                    _i3(f"[con_id={cid}]", "move", "container", "to",
+                       "workspace", dest)
+                elif a == "layout":
+                    mode = cmd.get("mode")
+                    if mode not in ("split", "tabbed", "stacking", "toggle split"):
+                        raise ValueError("bad mode")
+                    _i3("layout", *mode.split(" "))
+                elif a == "fullscreen":
+                    cid = _desks_int(cmd.get("cid"))
+                    if cid is None or not any(w["cid"] == cid for w in snap["wins"]):
+                        raise ValueError("unknown cid")
+                    _i3(f"[con_id={cid}]", "fullscreen", "toggle")
+            except Exception:
+                self._json({"err": "rejected: unknown action, bad field, "
+                                   "or not in the current i3 tree"}, 400)
+                return
+            self._json({"ok": True})
+            return
         self.send_response(404)
         self.end_headers()
 
@@ -611,9 +836,12 @@ class Handler(SimpleHTTPRequestHandler):
             for i, r in enumerate(cfg.get("files", {}).get("roots", [])):
                 orbs.append({"title": r.get("title", "Files"),
                              "kind": "files", "root": i})
+            if cfg.get("desks", {}).get("enabled"):
+                orbs.append({"title": "Desks", "kind": "desks"})
             self._json({"name": cfg.get("name", "JARVIS"),
                         "res": cfg.get("res"), "fps": cfg.get("fps"),
-                        "orbs": orbs})
+                        "orbs": orbs,
+                        "desksMax": cfg.get("desks", {}).get("maxStreams", 3)})
             return
         if path == "/tuning":
             # every hand-fitted number the stage reads at boot. Missing
@@ -809,6 +1037,70 @@ class Handler(SimpleHTTPRequestHandler):
                         remaining -= len(chunk)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            return
+        if path in ("/desks", "/desks/shot", "/desks/stream") \
+                and not cfg.get("desks", {}).get("enabled"):
+            # the feature can be turned off entirely — every /desks*
+            # endpoint 404s, same as if it didn't exist
+            self.send_response(404)
+            self.end_headers()
+            return
+        if path == "/desks":
+            self._json(_desks_snapshot())
+            return
+        if path == "/desks/shot":
+            try:
+                xid = int((q.get("xid") or [""])[0])
+            except ValueError:
+                self._json({"err": "bad xid"}, 400)
+                return
+            snap = _desks_snapshot()
+            if not any(w["xid"] == xid for w in snap["wins"]):
+                self._json({"err": "unknown window"}, 400)
+                return
+            png, ok = _desks_capture(xid)
+            if png is None:
+                self._json({"err": "capture failed"}, 503)
+                return
+            self._raw(png, 200 if ok else 503, "image/png")
+            return
+        if path == "/desks/stream":
+            global _DESK_STREAMS
+            try:
+                xid = int((q.get("xid") or [""])[0])
+            except ValueError:
+                self._json({"err": "bad xid"}, 400)
+                return
+            snap = _desks_snapshot()
+            if not any(w["xid"] == xid for w in snap["wins"]):
+                self._json({"err": "unknown window"}, 400)
+                return
+            with _DESK_LOCK:
+                if _DESK_STREAMS >= int(cfg.get("desks", {}).get("maxStreams", 3)):
+                    self._json({"err": "too many desk streams"}, 429)
+                    return
+                _DESK_STREAMS += 1
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type",
+                                 "multipart/x-mixed-replace; boundary=jarvisframe")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                period = 1.0 / max(1, min(10, int(cfg.get("desks", {}).get("fps", 4))))
+                while True:
+                    png, ok = _desks_capture(xid)
+                    if png:
+                        self.wfile.write(
+                            b"--jarvisframe\r\nContent-Type: image/png\r\n"
+                            b"Content-Length: " + str(len(png)).encode() +
+                            b"\r\n\r\n" + png + b"\r\n")
+                        self.wfile.flush()
+                    time.sleep(period)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                pass
+            finally:
+                with _DESK_LOCK:
+                    _DESK_STREAMS -= 1
             return
         if path == "/orb":
             # the ring's heartbeat: your assistant's live state, read from

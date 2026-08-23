@@ -13,6 +13,14 @@
       { "title": "Desktop", "path": "~/Desktop" }
     ],
     "maxBytes": 52428800
+  },
+  "desks": {
+    "enabled": true,
+    "fps": 4,
+    "minGapMs": 180,
+    "maxStreams": 3,
+    "display": ":0",
+    "xauthority": "/run/user/1000/lyxauth"
   }
 }
 
