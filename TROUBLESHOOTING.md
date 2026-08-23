@@ -12,6 +12,7 @@ This file is written for humans AND for AI assistants. If you're an AI helping s
 - **Hands move the wrong direction in the OBS overlay**: your OBS camera source is mirrored. Add `&mirror=1` to the render URL.
 - **Render page is black in OBS**: you're missing `?role=render` on the browser-source URL, or the source sits under your camera layer instead of over it.
 - **Filming vertical / 9:16**: add `?portrait=1` to the tracker URL (the camera negotiates 1080×1920 instead of landscape), shape the tracker's Chrome window roughly 9:16 tall, and give the OBS render source a 9:16 canvas. Field note: vertical wants `&ss=3` (not 2) to stay sharp; browser source at 3240×5760 on a 1080×1920 canvas.
+- **17–19 fps in a dim or backlit room (Linux)**: that's the camera buying light with a longer exposure, not the page — see *The light governor* below: FAST holds 30 fps and lifts the detector's input instead; press **K** to measure both in your room.
 - **Choppy / low fps on a slow machine**: add `?res=1280x720` to the tracker URL: hand tracking loses nothing (MediaPipe downscales every frame to its model input regardless), and the lighter frames buy back fps. The same knob goes up too: `?res=3840x2160` for a 4K self-view on machines that can carry it.
 - **A file I dropped in doesn't show up**: press **R** on the tracker (re-reads all folders from disk), or tap the ring → the orb again.
 - **Running on Windows:** launch with `python server.py` (python3 is the Mac and Linux name). The `bin/` scripts are bash; without Git Bash, use the curl equivalent from the wizard's Phase 4b, or have your AI adapt them.
@@ -41,6 +42,22 @@ All of these are ratios or angles measured against the hand's own geometry; that
 | `a` | palm aspect: span ÷ knuckle-row width | ~1.5–5.5 = real hand poses. **> 6 = the tracker is hallucinating** (the sanity bound rejects it) |
 | `f8 f12 f16 f20` | per-finger ARCH: tip-from-wrist ÷ knuckle-from-wrist | > ~1.4 = finger reaching outward, ~1.0 or less = folded in |
 | `t` | thumb-tip distance from the ring-finger knuckle ÷ span | the profile-view pinch judge: high = thumb riding far off the knuckle row |
+
+## The light governor (frame rate vs light) — Linux
+
+The camera, not the code, sets the frame rate: a webcam's auto-exposure with *dynamic framerate* on stretches each frame past 1/30 s to buy light in a dim or backlit room, and the board's fps follows (17 fps is that camera buying light). With it off, the camera holds 30 fps but the frame arrives darker — integrated laptop cameras usually have no auto-gain to fall back on. THE LIGHT GOVERNOR in `stage.html` manages that trade live:
+
+- **FAST** (default): dynamic framerate off → 30 fps; the detector's input is lifted in software to the brightness hands need (the self-view stays raw), and the ISP **tone ladder** (gamma / brightness / backlight compensation) climbs when the hand zone is dark and backs off when the room is lit.
+- **LIGHT**: dynamic framerate on (the light-buying config, lower fps) — only when the hand zone is too dark to lift without turning noise into hands.
+- **L** on the tracker cycles `auto → fast → light` (a non-auto choice persists); `?fps=30|auto|light` on the URL pins it for that launch; your AI can `POST /cmd {"a":"light","mode":"fast"}`.
+- It works through the server's `/cam` bridge (`GET /cam` readback, `POST /cam {"set":{…}}`, allowlisted `v4l2-ctl` controls; Linux only). No bridge → the governor is telemetry-only and the camera keeps whatever the OS gave it.
+- Telemetry: `GET /state` → `perf.cam` = `{md, st, tone, dyn, exp, gamma, lg, lh, p10, gain, zone, pre}` (mode/state, the applied controls, global + hand-zone luma 0–1, the software lift, what the meter is looking at, the prep cost in ms). The **D overlay**'s second line shows the same.
+
+**The camera clinic (K).** Don't guess which exposure state detects better — measure it. Press **K** (or `POST /cmd {"a":"clinic"}`), keep ONE open hand in frame, and follow the toasts (hold still, then wave slowly) through five states (~40 s). You get a table — per state: fps, detection rate still/moving, fingertip jitter raw vs smoothed (‰ of the hand's span), hand-zone luma, the software lift, inference ms — as a 25 s toast, on the D overlay, in `GET /state → perf.clinic`, and as a CAMERA CLINIC card on the board. If FAST's detection rate or jitter is clearly worse than LIGHT's in your room, that is your answer: `L` to LIGHT, or more light on your hands.
+
+## The hands: identity, grace, smoothing
+
+MediaPipe hands the tracker an array each frame; the tracker keeps each hand's identity across frames by wrist distance (handedness only breaks ties), never reuses an id, keeps a vanished hand as a ghost for 200 ms (its item stays parked; a hand that blinks out fires no tap and no fling), and passes every landmark through a One-Euro filter (steady at rest, sharp in motion). `?smooth=0` bypasses the filter for A/B. None of the gesture thresholds moved — they just read steadier numbers.
 
 ## THE TUNING CLINIC (for AI assistants)
 

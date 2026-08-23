@@ -5,15 +5,19 @@
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:$PATH"
 cd "$(dirname "$(readlink -f "$0")")"
 
-# camera: FINAL verdict after a day of A/B (2026-08-23). Auto exposure
-# with dynamic framerate ON is the only config where pinch/gestures
-# detect reliably in this backlit room. It runs ~17-18fps — that is the
-# camera buying the light it needs to SEE the hands, and every gesture
-# (pinch, throw, claw) was proven working at this rate. The 30fps manual
-# configs all starved detection. Backlight comp + brightness are boosted
-# to help the shadowed side. For real 30fps: put a lamp facing the user.
-v4l2-ctl -d /dev/video0 -c auto_exposure=3 -c exposure_dynamic_framerate=1 \
-  -c backlight_compensation=2 -c brightness=170 2>/dev/null
+# camera: the page owns it now. THE LIGHT GOVERNOR in stage.html sets
+# the exposure state live through the server's /cam bridge (v4l2-ctl):
+# FAST = auto exposure with dynamic framerate OFF -> a solid 30fps, the
+# detector's input lifted in software + the ISP tone ladder (gamma /
+# brightness / backlight comp) walked up in the dark and down in a lit
+# room; LIGHT = dynamic framerate ON (the old 17fps light-buying config)
+# only when the hand zone is too dark to lift. Measured 2026-08-23: this
+# camera has NO auto-gain, so 30fps = half the light, and ROI metering /
+# manual exposure change nothing — see the comment block in stage.html.
+# L on the board cycles auto/fast/light; ?fps=30|auto|light pins it;
+# K runs the camera clinic; GET /state -> perf.cam is the telemetry.
+# (Chrome does not reset V4L2 controls on open, so nothing is needed
+# here before launch; the governor re-applies on every camera start.)
 
 PORT=$(python3 -c "import json;print(json.load(open('barehands.json')).get('port',8794))" 2>/dev/null || echo 8794)
 URL="http://127.0.0.1:$PORT/stage.html?res=1280x720"
