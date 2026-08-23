@@ -397,7 +397,8 @@ const TUNE_DEFAULTS = {
   pose: { enabled: false, everyNthFrame: 2, wristTol: 0.12 },
   hands2: { enabled: true, sideW: 1.6, sideH: 2.4, conf: 0.5, dedupe: 0.08,
             maxPerFrame: 1, everyNthFrame: 1 },
-  image3d: { enabled: true, depth: 0.35, seg: 160, alphaCut: 0.35, rim: 0.9, flat: false },
+  image3d: { enabled: true, depth: 0.22, seg: 160, alphaCut: 0.35, rim: 0.55,
+             rimTint: "image", bloom: 0.45, exposure: 0.95, flat: false },
 };
 function tuneMerge(base, over) {
   const out = Array.isArray(base) ? base.slice() : { ...base };
@@ -1251,6 +1252,7 @@ async function buildModelScene(el, src, mm, lift) {
 // TRIANGLES (not just the height), so a transparent-PNG prop keeps its
 // true silhouette instead of staying a rectangle.
 async function buildImageScene(el, src, opts) {
+  const T0 = TUNE.image3d || {};
   opts = opts || {};
   const fx = !!opts.fx;
   try {
@@ -1261,7 +1263,8 @@ async function buildImageScene(el, src, opts) {
     renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
     renderer.setSize(MODEL_PX, MODEL_PX, false);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.82;      // same solid-model exposure
+    renderer.toneMappingExposure = T0.exposure ?? 0.95;   // images read
+    // brighter than solid models: they are lit art, not physical objects
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
     camera.position.set(0, 0, 3.2);           // same 35° / distance as models
@@ -1290,8 +1293,9 @@ async function buildImageScene(el, src, opts) {
     const idata = octx.getImageData(0, 0, cw, ch).data;
 
     const T = TUNE.image3d || {};
-    const depth = T.depth ?? 0.35, seg = Math.max(1, T.seg || 160),
-          alphaCut = T.alphaCut ?? 0.35, rim = T.rim ?? 0.9;
+    const depth = T.depth ?? 0.22, seg = Math.max(1, T.seg || 160),
+          alphaCut = T.alphaCut ?? 0.35, rim = T.rim ?? 0.55,
+          rimTint = T.rimTint || "image", bloomK = T.bloom ?? 0.45;
 
     // plane sized to the image's own aspect, long edge = 2 units (the
     // model path's box-fit below scales it to fill the card the same way
@@ -1302,6 +1306,10 @@ async function buildImageScene(el, src, opts) {
     const geo = new THREE.PlaneGeometry(w, h, seg, seg);
     const posAttr = geo.attributes.position, uvAttr = geo.attributes.uv;
     const holes = new Uint8Array(posAttr.count);
+    // THE PICTURE'S OWN LIGHT: mean colour of the brighter, opaque
+    // texels — what the rim glows with when rimTint is "image", so a
+    // red photo rims red instead of everything rimming teal.
+    let tr = 0, tg = 0, tb = 0, tn = 0;
     for (let i = 0; i < posAttr.count; i++) {
       const u = uvAttr.getX(i), v = uvAttr.getY(i);
       // CanvasTexture keeps three's default flipY, so v=0 is the BOTTOM
@@ -1314,6 +1322,7 @@ async function buildImageScene(el, src, opts) {
             b = idata[o + 2] / 255, a = idata[o + 3] / 255;
       if (a < alphaCut) holes[i] = 1;
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (a >= 0.5 && lum > 0.22) { tr += r; tg += g; tb += b; tn++; }
       posAttr.setZ(i, lum * depth * (h / 2));
     }
     // carve the silhouette: a triangle survives only if none of its three
@@ -1333,8 +1342,15 @@ async function buildImageScene(el, src, opts) {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.needsUpdate = true;
 
+    // THE PICTURE IS LIT ART, NOT STONE (the neon round, take 2): with a
+    // plain lit material the image's BLACKS pick up environment light and
+    // the whole relief reads as grey plaster with a neon smear on top.
+    // The texture drives EMISSION as well as albedo, so black stays black,
+    // neon stays neon, and the key light only sculpts the relief's edges.
     const mat = new THREE.MeshStandardMaterial({
-      map: texture, roughness: 0.55, metalness: 0.05,
+      map: texture, emissive: new THREE.Color(0xffffff), emissiveMap: texture,
+      emissiveIntensity: T.emissive ?? 0.92,
+      roughness: 0.62, metalness: 0.0,
       transparent: fx, alphaTest: fx ? alphaCut : 0, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geo, mat);
 
@@ -1343,9 +1359,19 @@ async function buildImageScene(el, src, opts) {
     // onBeforeCompile across three.js versions): the exact fresnel formula
     // and teal (0.75, 1.0, 0.96) the ghost-glass hologram shader uses, so
     // an image rim-glows the same color a holo model does.
+    let rimCol = new THREE.Color(0.75, 1.0, 0.96);   // the holo teal
+    if (rimTint === "image" && tn > 0) {
+      // normalise to the brightest channel so the rim is a LIGHT of the
+      // picture's hue, never a dim smear of its average
+      const mr = tr / tn, mg = tg / tn, mb = tb / tn;
+      const mx = Math.max(mr, mg, mb, 1e-3);
+      rimCol = new THREE.Color(0.35 + 0.65 * mr / mx,
+                               0.35 + 0.65 * mg / mx,
+                               0.35 + 0.65 * mb / mx);
+    }
     const rimMat = new THREE.ShaderMaterial({
-      uniforms: { cRim: { value: new THREE.Color(0.75, 1.0, 0.96) },
-                  rimPow: { value: 3.0 }, rimA: { value: rim } },
+      uniforms: { cRim: { value: rimCol },
+                  rimPow: { value: 4.5 }, rimA: { value: rim } },
       vertexShader: `
         varying vec3 vN; varying vec3 vV;
         void main() {
@@ -1381,14 +1407,19 @@ async function buildImageScene(el, src, opts) {
     // lit like a solid model: RoomEnvironment PMREM + ambient + one key
     scene.environment = new THREE.PMREMGenerator(renderer)
       .fromScene(new RoomEnvironment(), 0.04).texture;
-    scene.add(new THREE.AmbientLight(0xffffff, 0.28));
-    const key = new THREE.DirectionalLight(0xffffff, 1.1);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.10));
+    const key = new THREE.DirectionalLight(0xffffff, 0.55);
     key.position.set(2, 3, 4);
     scene.add(key);
-    mat.envMapIntensity = 0.65;
+    mat.envMapIntensity = 0.16;   // barely — emission carries the image
 
     // reuse the model path's bloom rig so the rim catches real bloom
-    const post = buildBloomRig(THREE, renderer, { k: 0.9, sat: 1.4, spread: 2.0 });
+    // NEON, HANDLED (the user: "handle neon better it looks wird rn"):
+    // neon source art was being glowed twice — a wide teal rim over it
+    // and a saturation-boosting bloom on top. The rim is tighter and
+    // wears the picture's own colour now; the bloom stops pushing
+    // saturation and just carries the light.
+    const post = buildBloomRig(THREE, renderer, { k: bloomK, sat: 1.0, spread: 1.6 });
 
     return { renderer, scene, camera, group, canvas, mixer: null, post, THREE,
              ghostMat: null, exParts: [], exSpread: 0, exC: 0,
@@ -2801,7 +2832,19 @@ function physics(dt) {
       // idle pauses during the gimbal grip too — it was creeping the
       // yaw while Jared held a precise two-hand pose.)
       c.rvy = (c.rvy || 0) * Math.pow(0.15, dt);
-      c.ry = (c.ry || 0) + ((c.rvy || 0) + 0.12) * dt;
+      // A PICTURE FACES YOU (the neon round, take 3): the stately idle
+      // turn is right for a hologram of an OBJECT, but an image relief
+      // that keeps turning goes edge-on and unreadable — the single
+      // biggest reason the 3D images "looked weird". Image reliefs keep
+      // whatever spin the user gives them and add none of their own,
+      // and they ease back to facing the viewer when left alone.
+      const idleSpin = c.def && c.def.mmode === "img3d" ? 0 : 0.12;
+      c.ry = (c.ry || 0) + ((c.rvy || 0) + idleSpin) * dt;
+      if (!idleSpin && Math.abs(c.rvy || 0) < 0.05) {
+        const home = 0.0;                       // face-on
+        c.ry += (home - c.ry) * Math.min(1, 1.6 * dt);
+        c.rx += ((c.rxHome ?? -0.05) - (c.rx || 0)) * Math.min(1, 1.6 * dt);
+      }
     }
     c.el.style.setProperty("--ch", c.hch || 0);   // hover charge glow
     const w = c.el.offsetWidth, h = c.el.offsetHeight;
