@@ -9,8 +9,8 @@
   ],
   "files": {
     "roots": [
-      { "title": "Home",    "path": "~" },
-      { "title": "Desktop", "path": "~/Desktop" }
+      { "title": "Documents", "path": "~/Documents" },
+      { "title": "Desktop",   "path": "~/Desktop" }
     ],
     "maxBytes": 52428800
   },

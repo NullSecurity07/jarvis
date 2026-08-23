@@ -67,10 +67,14 @@ folder — the airlock: the only place images/models ever stage from.
 
 "files" (optional) adds one browser orb per configured root, for anything
 else — PDFs, code, archives, whatever is on disk:
-  "files": { "roots": [ { "title": "Home", "path": "~" } ],
+  "files": { "roots": [ { "title": "Documents", "path": "~/Documents" } ],
              "maxBytes": 52428800 }
-(absent key = a single "Home" root at ~, 50MB cap). Read-only, jailed to
-those roots exactly like a notes orb — the user opts in by naming a root.
+(absent key = a single "Documents" root at ~/Documents, 50MB cap; ~ itself
+is deliberately never a shipped default — it would hand out ~/.ssh and
+everything else in the home directory). Read-only, jailed to those roots
+exactly like a notes orb (every dot-prefixed path segment — .ssh,
+.bash_history, .config, .git, ... — is refused outright, wherever it
+would land) — the user opts in by naming a root.
 
 "desks" (optional, i3/X11 only) turns the board into a live view of your
 own machine — every workspace and window becomes something you can put
@@ -130,7 +134,10 @@ def _read_config():
         orb["path"] = str(Path(str(orb.get("path", ""))).expanduser())
     files = cfg.get("files") if isinstance(cfg.get("files"), dict) else {}
     if not files.get("roots"):
-        files["roots"] = [{"title": "Home", "path": "~"}]
+        # SECURITY: never ~ by default — that would hand out ~/.ssh and
+        # everything else in the home directory to a page that boots
+        # with no jarvis.json at all. Documents is opt-out, not opt-in.
+        files["roots"] = [{"title": "Documents", "path": "~/Documents"}]
     if not files.get("maxBytes"):
         files["maxBytes"] = 52428800
     for r in files["roots"]:
@@ -201,11 +208,23 @@ def _jail_resolve(root, rel):
     """rel resolved against root -> the resolved Path, or None unless it
     lands AT or INSIDE root (symlink escapes rejected by comparing the
     RESOLVED paths, not the textual ones — shared by /note, /files, /file
-    and the open_file command)."""
+    and the open_file command).
+
+    SECURITY (fix round, 2026-08-24): every path SEGMENT of rel is
+    rejected outright if it starts with "." — dotfiles/dotdirs (.ssh,
+    .bash_history, .config, .git, ...) are never resolved, never listed,
+    never served, full stop. This is checked on the raw segments before
+    resolve() ever runs, which also rejects ".." traversal as a side
+    effect (".." itself starts with a dot) — one check, three call sites
+    (/files, /file, open_file) plus /note, all covered here."""
     if root is None:
         return None
+    rel = str(rel or "")
+    for seg in rel.replace("\\", "/").split("/"):
+        if seg.startswith("."):
+            return None
     try:
-        target = (root / str(rel or "")).resolve()
+        target = (root / rel).resolve()
     except Exception:
         return None
     if target != root and root not in target.parents:
@@ -242,6 +261,11 @@ def kind_of(ext):
 
 
 def ctype_of(kind, name):
+    if name.lower().endswith(".svg"):
+        # an SVG can embed <script> that runs in the board's own origin
+        # if a browser is ever pointed at /file by top-level navigation —
+        # never served as image/svg+xml, whatever mimetypes would guess
+        return "text/plain; charset=utf-8"
     if kind == "pdf":
         return "application/pdf"
     if kind in ("text", "code", "md"):
@@ -398,9 +422,14 @@ _MAX_QUEUE = 256        # a hidden board must not grow a silent backlog forever
 # server restart) brings it back. Written from the heartbeat, at most
 # once a second, and only when the scene actually changed.
 _BOARD = {"sig": None, "t": 0.0}
-_BOARD_TYPES = ("card", "img", "model", "panel")
+_BOARD_TYPES = ("card", "img", "model", "panel", "media")
+# ptype/fsrc/proot/prel/mk (Task 16 fix round 1): a files-browser panel or
+# media card round-trips through /file on restore, not the notes-jailed
+# /note — the page (pg/pgs) is deliberately NOT persisted, a restored PDF
+# just reopens at page 1.
 _BOARD_KEYS = ("type", "title", "body", "src", "mm", "lf", "ex", "rx", "ry",
-               "rz", "file", "x", "y", "scale")
+               "rz", "file", "x", "y", "scale", "ptype", "fsrc", "proot",
+               "prel", "mk")
 
 
 def _persist_board(body):
@@ -497,6 +526,13 @@ _CAM_CTRLS = {                      # name: (lo, hi) or None for the rect
 }
 _RECT_RE = re.compile(r"^\(\d{1,4},\d{1,4}\)/\d{1,4}x\d{1,4}$")
 
+# THE DNS-REBINDING GUARD: "listens on 127.0.0.1" alone is not actually
+# localhost-only — a page on an attacker's DNS name that resolves to
+# 127.0.0.1 still gets a same-origin fetch to this port, and the browser
+# sends THAT name in Host. Every request must carry a Host the browser
+# could only send by actually talking to us at loopback.
+_HOST_RE = re.compile(r"^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", re.IGNORECASE)
+
 
 def cam_read():
     """Readback of every allowlisted control: {name: value-string}."""
@@ -567,6 +603,19 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def _host_ok(self):
+        return bool(_HOST_RE.match(self.headers.get("Host", "")))
+
+    def do_HEAD(self):
+        # only reaches the inherited static-file HEAD (serves from HERE,
+        # the repo directory) — the same guard as GET/POST, for the same
+        # reason: a Host-header check must cover every verb, not just two
+        if not self._host_ok():
+            self.send_response(403)
+            self.end_headers()
+            return
+        super().do_HEAD()
+
     def handle(self):
         # the tracker drops heartbeat connections mid-reply all the time
         # (a reload, a throttled tab): that is not an error worth a
@@ -595,6 +644,10 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         global _STATE, _STATE_T, _CMD_SEQ, _ACK
+        if not self._host_ok():
+            self.send_response(403)
+            self.end_headers()
+            return
         url = urllib.parse.urlparse(self.path)
         path, q = url.path, urllib.parse.parse_qs(url.query)
         n = int(self.headers.get("Content-Length", 0) or 0)
@@ -821,6 +874,10 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if not self._host_ok():
+            self.send_response(403)
+            self.end_headers()
+            return
         url = urllib.parse.urlparse(self.path)
         path, q = url.path, urllib.parse.parse_qs(url.query)
         cfg = config()
@@ -993,10 +1050,6 @@ class Handler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
             max_bytes = int(cfg.get("files", {}).get("maxBytes", 52428800))
-            if size > max_bytes:
-                self.send_response(413)
-                self.end_headers()
-                return
             ctype = ctype_of(kind_of(target.suffix), target.name)
             start, end, status = 0, size - 1, 200
             rng = self.headers.get("Range")
@@ -1016,12 +1069,28 @@ class Handler(SimpleHTTPRequestHandler):
                         return
                     end = min(end, size - 1)
                     status = 206
+            elif size > max_bytes:
+                # no Range: the whole file would have to be served, and
+                # the whole file is over the cap — refuse outright
+                self.send_response(413)
+                self.end_headers()
+                return
             length = end - start + 1
+            if length > max_bytes:
+                # the cap governs BYTES SERVED, not file size: a ranged
+                # request under the cap streams fine even off an oversized
+                # file (this is what actually lets a big video/audio file
+                # play at all — the whole-file check above only catches
+                # an unranged request)
+                self.send_response(413)
+                self.end_headers()
+                return
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(length))
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             if status == 206:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             self.end_headers()
