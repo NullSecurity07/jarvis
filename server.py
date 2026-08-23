@@ -692,14 +692,19 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _csrf_ok(self):
         # DEFENSE IN DEPTH, not a hard gate: _host_ok defends against DNS
-        # rebinding (a hostile page reaching us at all); this narrows
-        # WHO can act, for the state-changing routes, once a page has
-        # legitimately reached us. A modern browser stamps Sec-Fetch-Site
-        # on every request; curl and bin/board.sh never send it at all,
-        # so its ABSENCE is allowed on purpose — this must never break
-        # the AI driving the board from the command line.
+        # rebinding (a hostile page reaching us at all), but the browser
+        # stamps Host as 127.0.0.1 itself once it's actually talking to
+        # us, so _host_ok alone does NOT stop a page on any other site
+        # from POSTing here — CORS only blocks that page from READING the
+        # reply, not the side effect (disabling the owner lock, deleting
+        # the enrolment, moving windows, wiping the board...). Reject only
+        # when Sec-Fetch-Site is PRESENT and says otherwise — same-site
+        # (a different port on localhost) is NOT trusted either, only
+        # same-origin or none (typed/bookmarked, not fetched by a page).
+        # Absence is allowed on purpose: curl and bin/board.sh never send
+        # this header at all, and must keep working.
         site = self.headers.get("Sec-Fetch-Site")
-        return site is None or site in ("same-origin", "same-site", "none")
+        return site is None or site in ("same-origin", "none")
 
     def do_HEAD(self):
         # otherwise only reaches the inherited static-file HEAD (serves
@@ -838,10 +843,11 @@ class Handler(SimpleHTTPRequestHandler):
             return
         url = urllib.parse.urlparse(self.path)
         path, q = url.path, urllib.parse.parse_qs(url.query)
-        # CSRF, defense in depth: state-changing routes only. /state is
-        # the tracker's own ~45Hz heartbeat, not a write a hostile page
-        # would want, so it's deliberately excluded here.
-        if path in ("/cmd", "/desks/cmd", "/owner", "/cam", "/dump") \
+        # CSRF, defense in depth: every state-changing route, /state
+        # included — it persists state/board.json and overwrites the live
+        # scene, so a cross-site POST /state {"items":[]} is just as much
+        # a write as any of the others.
+        if path in ("/cmd", "/desks/cmd", "/owner", "/cam", "/dump", "/state") \
                 and not self._csrf_ok():
             self.send_response(403)
             self.end_headers()

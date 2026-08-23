@@ -4046,6 +4046,16 @@ async function boot() {
     const o = await (await fetch("/owner", { cache: "no-store" })).json();
     if (o && Array.isArray(o.vecs) && o.vecs.length) { LOCK.owner = o; LOCK.enrolled = true; }
   } catch (_) {}
+  // FAIL CLOSED AT BOOT: restoreBoard() below repaints the whole
+  // previous session — cards, notes, images — well before the first
+  // frame() tick ever runs decide()/applyVerdict(). Set the same frost
+  // class applyVerdict() would, using what's already known here: an
+  // enrolled owner with the lock enabled starts locked, exactly like
+  // decide()'s own boot default (st.locked defaults true) — no owner
+  // yet, or the lock disabled/overridden, starts open, since there is
+  // nothing for the lock to protect against. applyVerdict() takes over
+  // and clears this on the first unlocked verdict.
+  document.body.classList.toggle("locked", LOCK.enabled && LOCK.enrolled);
   IDENT = createIdentity({});
   FACES = createFaces({ FaceLandmarker, vision: _vision, identity: IDENT, tune: TUNE,
                         owner: () => LOCK.owner });
