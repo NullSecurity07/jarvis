@@ -216,7 +216,12 @@ def _jail_resolve(root, rel):
     never served, full stop. This is checked on the raw segments before
     resolve() ever runs, which also rejects ".." traversal as a side
     effect (".." itself starts with a dot) — one check, three call sites
-    (/files, /file, open_file) plus /note, all covered here."""
+    (/files, /file, open_file) plus /note, all covered here. A SECOND
+    check re-runs the same test on the RESOLVED path's segments (relative
+    to root): a symlink can carry a dot-free name while pointing AT a
+    dotfile (e.g. a plain-named symlink -> ~/.ssh/id_ed25519) — the first
+    check alone would miss that laundering, since it only ever sees the
+    name the caller typed, never where a symlink actually leads."""
     if root is None:
         return None
     rel = str(rel or "")
@@ -229,6 +234,10 @@ def _jail_resolve(root, rel):
         return None
     if target != root and root not in target.parents:
         return None
+    if target != root:
+        for seg in target.relative_to(root).parts:
+            if seg.startswith("."):
+                return None
     return target
 
 
