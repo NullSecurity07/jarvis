@@ -40,4 +40,20 @@ if (vecs.length >= 2) {
   log(`same-face spread: max distance ${mx.toFixed(3)} (matchDist 0.5 must stay above this)`);
 }
 log("done");
+
+// ---- faces readout: the FaceLandmarker beside identity, like the stage
+import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs").then(async (mp) => {
+  const { createFaces } = await import("./js/faces.js");
+  const vision = await mp.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  const tune = { face: { everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4, blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25 }, owner: {} };
+  const FACES = createFaces({ FaceLandmarker: mp.FaceLandmarker, vision, identity: ID, tune, owner: () => ({ vecs: vecs.map(x => Array.from(x)) }) });
+  log(`faces ready=${await FACES.ready} ${FACES.error || ""}`);
+  const line = document.createElement("pre"); document.body.appendChild(line);
+  (function loop() {
+    FACES.tick(v, v, performance.now());
+    line.textContent = `face ${FACES.perf.face.toFixed(1)}ms id ${FACES.perf.id.toFixed(0)}ms\n` +
+      FACES.list().map(f => `#${f.id} ${f.seenNow ? "" : "(ghost) "}c ${f.cx.toFixed(2)},${f.cy.toFixed(2)} w ${f.w.toFixed(2)} eye ${f.eyeOpen.toFixed(2)} blink ${((performance.now() - f.blinkT) / 1000).toFixed(1)}s ago yaw ${f.yaw.toFixed(0)} pitch ${f.pitch.toFixed(0)} att ${f.attention ? 1 : 0} score ${Number.isFinite(f.score) ? f.score.toFixed(3) : "-"}`).join("\n");
+    requestAnimationFrame(loop);
+  })();
+});
 </script>
