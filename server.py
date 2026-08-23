@@ -291,6 +291,13 @@ def ctype_of(kind, name):
 # ship untested overnight.
 _I3_MSG = "/usr/sbin/i3-msg"
 _DESK_EXCLUDE_CLASS = {"polybar"}
+# fix round 1: the original rule (title EXACTLY "jarvis") missed a real
+# case live — the controller's verification browser was class
+# Chromium-browser, title "jarvis – <tab title>", which slipped through
+# and mirrored the board into itself. Any BROWSER window (by class) whose
+# title CONTAINS "jarvis" (case-insensitive) is the board now, covering
+# Chrome/Chromium under any window-title suffix the tab adds.
+_DESK_BROWSER_CLASS = {"google-chrome", "chromium", "chromium-browser", "chrome"}
 _DESK_LOCK = threading.Lock()
 _DESK_CACHE = {}          # xid -> {"t": monotonic, "png": bytes}
 _DESK_STREAMS = 0         # concurrent /desks/stream connections
@@ -329,10 +336,11 @@ def _i3(*args):
 def _desks_snapshot():
     """{"ws":[{"num","name","visible","focused"}],
     "wins":[{"cid","xid","ws","cls","title","w","h","focused","visible"}]}
-    from get_workspaces + get_tree. The board's own window (title exactly
-    "jarvis", or a Google-chrome window titled "jarvis") and Polybar are
-    excluded so the glass never mirrors itself into infinity. Never
-    raises — an i3-msg failure just yields an empty board."""
+    from get_workspaces + get_tree. The board's own window (any browser
+    window — see _DESK_BROWSER_CLASS — whose title contains "jarvis",
+    case-insensitive) and Polybar are excluded so the glass never mirrors
+    itself into infinity. Never raises — an i3-msg failure just yields an
+    empty board."""
     ws_raw = _i3("-t", "get_workspaces") or []
     tree = _i3("-t", "get_tree")
     ws = [{"num": w.get("num"), "name": w.get("name"),
@@ -348,8 +356,9 @@ def _desks_snapshot():
             props = n.get("window_properties") or {}
             cls = props.get("class") or ""
             title = n.get("name") or ""
-            is_board = title == "jarvis" or (cls == "Google-chrome" and title == "jarvis")
-            if not is_board and cls.lower() not in _DESK_EXCLUDE_CLASS:
+            cls_l = cls.lower()
+            is_board = cls_l in _DESK_BROWSER_CLASS and "jarvis" in title.lower()
+            if not is_board and cls_l not in _DESK_EXCLUDE_CLASS:
                 rect = n.get("rect") or {}
                 wins.append({"cid": n.get("id"), "xid": win, "ws": ws_num,
                             "cls": cls, "title": title,

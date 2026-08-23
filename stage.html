@@ -2161,22 +2161,76 @@ function stageDesk(xid, title) {
   const cap = CFG.desksMax || 3;
   const live = items.filter(i => i.type === "desk" && i.el.isConnected);
   if (live.length >= cap) {
-    const oldest = live.sort((a, b) => a.id - b.id)[0];
+    // fix round 1: prefer replacing an UNPINNED card (the user hasn't
+    // touched it) — only fall back to a pinned one if every live desk
+    // is pinned, so a deliberately-arranged card is the last to go.
+    const unpinned = live.filter(i => !i.pinned);
+    const pool = unpinned.length ? unpinned : live;
+    const oldest = pool.sort((a, b) => a.id - b.id)[0];
     killItem(oldest);
     toast(`desk cap reached (${cap}) — replaced the oldest live desktop`, 2600);
   }
   const el = document.createElement("div");
   el.className = "panel desk";
   el.innerHTML = `<div class="bar"><h3>${escT(title || "DESKTOP")}</h3></div>` +
-                 `<div class="body"><img src="/desks/stream?xid=${xid}" alt=""></div>`;
+                 `<div class="body"><img alt=""></div>`;
   BEHIND.appendChild(el);
-  const it = { el, id: UID++, type: "desk",
+  const it = { el, id: UID++, type: "desk", pinned: false,
     def: { title: title || "", file: "", xid, src: "/desks/stream?xid=" + xid },
     x: innerWidth * 0.5, y: innerHeight * 0.42, scale: 1, vx: 0, vy: 0,
     grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
-  it.anim = { k: "in", t: 0 }; it.el.style.opacity = "0.05";
+  it.el.style.opacity = "0.05";
+  // fix round 1, item 3: a stream can fail to START (the maxStreams cap
+  // was already at its ceiling from an EARLIER staged card the eviction
+  // above didn't reach yet, or a transient maim failure) and an <img>
+  // gives no visible signal when that happens — it just never paints.
+  // Retry with backoff a few times, then say so instead of staying
+  // silently blank forever.
+  const img = el.querySelector("img");
+  let deskRetries = 0;
+  img.onerror = () => {
+    if (!img.isConnected) return;
+    if (deskRetries++ >= 4) {
+      toast("this live desktop's stream keeps failing (maxStreams cap, or the window's gone) — tap it again", 3400);
+      return;
+    }
+    setTimeout(() => { if (img.isConnected) img.src = it.def.src + "&r=" + Date.now(); },
+               400 * deskRetries);
+  };
+  img.src = it.def.src;
   items.push(it);
+  retileDesks();
   return it;
+}
+
+// THE DESKS (fix round 1): the user's headline ask was "see multiple
+// desktops at once" — before this, every staged desk landed at the same
+// default centre and stacked unreadably. Every UNPINNED live desk card
+// (not currently fading out) is arranged on a simple grid, centred as a
+// group, gliding to its slot (the "tile" anim in physics()) rather than
+// snapping. A card the user has grabbed at all is marked pinned
+// (beginGrab) and is left exactly where they put it.
+function retileDesks() {
+  const live = items.filter(i => i.type === "desk" && i.el.isConnected &&
+                                 !i.pinned && (!i.anim || i.anim.k !== "out"));
+  const n = live.length;
+  if (!n) return;
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const mx = 40, my = 40;
+  const cellW = (innerWidth - mx * (cols + 1)) / cols;
+  const cellH = (innerHeight - my * (rows + 1)) / rows;
+  const NATW = 640, NATH = 460;   // .panel.desk's natural (scale-1) size
+  const fit = Math.min(1.3, Math.max(0.35,
+    Math.min(cellW / NATW, cellH / NATH) * 0.92));
+  live.forEach((it, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    const x1 = mx + col * (cellW + mx) + cellW / 2;
+    const y1 = my + row * (cellH + my) + cellH / 2;
+    const curOp = it.el.style.opacity === "" ? 1 : parseFloat(it.el.style.opacity);
+    it.anim = { k: "tile", t: 0, x0: it.x, y0: it.y, s0: it.scale,
+                x1, y1, s1: fit, op0: isNaN(curOp) ? 1 : curOp };
+  });
 }
 
 // The row's small focus affordance AND a live card's double-tapped bar
@@ -3045,6 +3099,10 @@ function beginGrab(c, i, cur) {
       const barR = barEl && barEl.getBoundingClientRect();
       c.barGrab = !!(barR && cur.y >= barR.top && cur.y <= barR.bottom &&
                     cur.x >= barR.left && cur.x <= barR.right);
+      // fix round 1: ANY grab at all — bar or body — pins a desk card
+      // out of retileDesks()'s auto-arrange from here on; the user
+      // touched it, so its position is theirs to keep.
+      c.pinned = true;
     } else {
       // GLASS ERA: every movable item arms the hold-to-rotate timer
       c.mode = "move";
@@ -3116,7 +3174,7 @@ function endGrab(c, i, cur) {
           c._lastBarTap = tapNow;
           setTimeout(() => {
             if (c._lastBarTap && performance.now() - c._lastBarTap >= 400 &&
-                c.el.isConnected) killItem(c);
+                c.el.isConnected) { killItem(c); retileDesks(); }
           }, 420);
         }
       }
@@ -3243,9 +3301,12 @@ function killItem(c) {
   if (c.type === "desk") {
     // STREAM HYGIENE (Task 17): drop the <img> src NOW, not after the
     // ~0.35s recede animation — the browser only ends the server-side
-    // MJPEG loop once the request itself is aborted.
+    // MJPEG loop once the request itself is aborted. Clear onerror FIRST
+    // (fix round 1's retry handler) — an empty src can itself fire
+    // onerror in some browsers, which would otherwise reopen the very
+    // stream this is trying to end.
     const img = c.el.querySelector("img");
-    if (img) img.src = "";
+    if (img) { img.onerror = null; img.src = ""; }
   }
   c.anim = { k: "out", t: 0 };
 }
@@ -3314,6 +3375,19 @@ function physics(dt) {
         c.scale = a.s0 + (a.s1 - a.s0) * e;
         c.el.style.opacity = "";
         if (p >= 1) c.anim = null;    // the spotlight classes hold until endPresent
+      } else if (a.k === "tile") {    // THE DESKS (fix round 1): an eased
+        // glide to a new grid slot (retileDesks) — op0 is wherever this
+        // card's opacity actually was when the tile was assigned (0.05
+        // for a brand-new card mid-materialize, 1 for an already-settled
+        // one just being reflowed), so this never flickers an existing
+        // card and still finishes a new one's fade-in.
+        const p = Math.min(a.t / 0.4, 1);
+        const e = 1 - Math.pow(1 - p, 3);
+        c.x = a.x0 + (a.x1 - a.x0) * e;
+        c.y = a.y0 + (a.y1 - a.y0) * e;
+        c.scale = a.s0 + (a.s1 - a.s0) * e;
+        c.el.style.opacity = String(a.op0 + (1 - a.op0) * e);
+        if (p >= 1) { c.anim = null; c.el.style.opacity = ""; }
       } else if (a.k === "give") {    // bloom in, then hand off to the
         const p = Math.min(a.t / 0.3, 1);            // pull flight — the
         const e = 1 - Math.pow(1 - p, 3);            // delivered-INTO-
