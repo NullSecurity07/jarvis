@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>gpu probe</title>
+<style>
+  body { background:#0a0f14; color:#9fe8e0; font:16px monospace; padding:24px; }
+  h1 { font-size:22px; color:#fff; }
+  .big { font-size:20px; margin:8px 0; }
+  .res { color:#7CFC00; }
+</style></head><body>
+<h1>barehands gpu probe</h1>
+<div id="out" class="big">starting…</div>
+<script type="module">
+const out = document.getElementById("out");
+const lines = [];
+function say(s){ lines.push(s); out.innerHTML = lines.join("<br>"); }
+const plain = [];
+async function report(){
+  try { await fetch("/cmd", { method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ a:"add_card", title:"GPU PROBE",
+                           body: plain.join("\n") }) }); } catch(e){}
+}
+
+// 1) WebGL renderer
+try {
+  const gl = document.createElement("canvas").getContext("webgl2");
+  const ext = gl.getExtension("WEBGL_debug_renderer_info");
+  const renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)
+                       : gl.getParameter(gl.RENDERER);
+  say(`WEBGL RENDERER: <span class="res">${renderer}</span>`);
+  plain.push("gl: " + renderer);
+} catch(e){ say("WEBGL RENDERER: <span class=res>FAILED — " + e.message + "</span>");
+  plain.push("gl FAILED: " + e.message); }
+
+// 2) MediaPipe inference benchmark, GPU vs CPU delegate
+import { HandLandmarker, FilesetResolver } from
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+// synthetic frame (contents don't matter for timing)
+const cv = document.createElement("canvas"); cv.width = 1280; cv.height = 720;
+const cx = cv.getContext("2d");
+cx.fillStyle = "#886655"; cx.fillRect(0,0,1280,720);
+cx.fillStyle = "#ddbb99"; cx.beginPath(); cx.arc(640,360,180,0,7); cx.fill();
+
+async function bench(delegate, src){
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  const lm = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: MODEL, delegate },
+    numHands: 2, runningMode: "VIDEO",
+    minHandDetectionConfidence: 0.7, minHandPresenceConfidence: 0.5 });
+  // warmup
+  for (let i=0;i<5;i++) lm.detectForVideo(src, performance.now());
+  const t0 = performance.now(); const N = 30;
+  for (let i=0;i<N;i++) lm.detectForVideo(src, performance.now());
+  const ms = (performance.now()-t0)/N;
+  lm.close();
+  return ms;
+}
+
+// a real <video> element fed from the canvas — exercises the video
+// texture-upload path the stage uses, without touching the camera
+async function makeVideo(){
+  const v = document.createElement("video");
+  v.muted = true; v.srcObject = cv.captureStream(30);
+  await v.play();
+  if (v.readyState < 2)
+    await new Promise(r => { v.onloadeddata = r; setTimeout(r, 3000); });
+  return v;
+}
+
+try {
+  say("benchmarking GPU delegate on VIDEO element…");
+  const vid = await makeVideo();
+  const gv = await bench("GPU", vid);
+  say(`GPU + video: <span class="res">${gv.toFixed(1)} ms/frame</span>`);
+  plain.push(`GPU+video ${gv.toFixed(1)}ms/frame -> ~${Math.min(30, 1000/gv).toFixed(0)}fps`);
+  say("benchmarking GPU delegate…");
+  const g = await bench("GPU", cv);
+  say(`GPU delegate: <span class="res">${g.toFixed(1)} ms/frame → ~${Math.min(30, 1000/g).toFixed(0)} fps cap</span>`);
+  plain.push(`GPU ${g.toFixed(1)}ms/frame -> ~${Math.min(30, 1000/g).toFixed(0)}fps`);
+  say("benchmarking CPU delegate…");
+  const c = await bench("CPU", cv);
+  say(`CPU delegate: <span class="res">${c.toFixed(1)} ms/frame → ~${Math.min(30, 1000/c).toFixed(0)} fps cap</span>`);
+  plain.push(`CPU ${c.toFixed(1)}ms/frame -> ~${Math.min(30, 1000/c).toFixed(0)}fps`);
+  say("— DONE —");
+} catch(e){ say("BENCH FAILED: <span class=res>" + e.message + "</span>");
+  plain.push("BENCH FAILED: " + e.message); }
+await report();
+</script></body></html>

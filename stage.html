@@ -341,6 +341,9 @@ let SAMPLER = null;    // the pose sampler (dormant — claw/pinch tuning)
 let CLAPSAMP = null;   // the P clap recorder (v3.9.1)
 let SAMPLED = "";      // its frozen last result (D overlay)
 let landmarker = null, lastVideoTs = -1, frames = 0, fps = 0, lastFpsTs = performance.now();
+// 2026-08-23 perf probes (EMA ms): det = detectForVideo, loop = physics
+// + renders, raf = frame-to-frame gap. Streamed via /state for tuning.
+const PERF = { det: 0, loop: 0, raf: 0, lastNow: 0 };
 
 let UID = 1;
 
@@ -2008,11 +2011,22 @@ function physics(dt) {
   });
 }
 
-async function boot() {
-  await pickInitialCam();
-  const vision = await FilesetResolver.forVisionTasks(
-    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-  landmarker = await HandLandmarker.createFromOptions(vision, {
+// 2026-08-23 — capture MediaPipe's silent GPU→CPU fallback warning so
+// the perf stream can show WHY inference went slow (it logs, we listen).
+window._mpLog = "";
+for (const _k of ["error", "warn"]) {
+  const _orig = console[_k].bind(console);
+  console[_k] = (...a) => {
+    const s = a.map(x => String((x && x.message) || x)).join(" ");
+    if (/gpu|delegate|webgl|fall|inference/i.test(s))
+      window._mpLog = (window._mpLog + " | " + s).slice(-400);
+    _orig(...a);
+  };
+}
+
+let _vision = null;
+function makeLandmarker() {
+  return HandLandmarker.createFromOptions(_vision, {
     baseOptions: { modelAssetPath:
       "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
       delegate: "GPU" },
@@ -2029,6 +2043,44 @@ async function boot() {
     // KEEP-tracking eased to 0.5 so a latched hand rides through blur;
     // fresh DETECTION stays 0.7 — the busy-background ghost wall holds.
     minHandPresenceConfidence: 0.5 });
+}
+
+async function boot() {
+  await pickInitialCam();
+  _vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  landmarker = await makeLandmarker();
+  // 2026-08-23 — THE DELEGATE WATCHDOG (this machine: GPU inference
+  // benches 8–11ms in a bare page, but the stage's boot lands on a
+  // silent CPU fallback at ~51ms → 10–17fps and every speed-based
+  // gesture starves). If sustained inference is CPU-slow, rebuild the
+  // landmarker — a fresh create reliably lands on the GPU path. Two
+  // attempts max; the old instance serves until the new one is ready.
+  // v2 (the 2-attempt lifetime cap was a design flaw: Chrome can evict
+  // the GPU context ANY time the window goes hidden, and a rebuild done
+  // WHILE hidden lands right back on CPU): heal forever but gently —
+  // only while visible, ≥8s between attempts, 4 consecutive duds pause
+  // it until the window next becomes visible. A fresh visibility also
+  // clears the det EMA: numbers measured while throttled are garbage.
+  let _reBusy = false, _reFails = 0, _reLast = 0;
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) { _reFails = 0; PERF.det = 0; }
+  });
+  setInterval(async () => {
+    if (document.hidden || _reBusy || _reFails >= 4 || !landmarker) return;
+    if (!PERF.det || PERF.det < 35) return;
+    if (performance.now() - _reLast < 8000) return;
+    _reBusy = true; _reLast = performance.now();
+    try {
+      const fresh = await makeLandmarker();
+      const old = landmarker; landmarker = fresh; old.close();
+      PERF.det = 0;
+      toast("hand tracker re-armed", 2500);
+      _reFails++;   // provisional — proven-fast inference clears it
+      setTimeout(() => { if (PERF.det && PERF.det < 20) _reFails = 0; }, 3000);
+    } catch (e) {}
+    _reBusy = false;
+  }, 4000);
   document.getElementById("boot").remove();
   await loadTree();
   spawnStage();
@@ -2039,7 +2091,10 @@ async function boot() {
     const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
     if (cam.currentTime !== lastVideoTs) {
       lastVideoTs = cam.currentTime;
+      const _t0 = performance.now();
       const res = landmarker.detectForVideo(cam, now);
+      PERF.det = PERF.det ? 0.9 * PERF.det + 0.1 * (performance.now() - _t0)
+                          : performance.now() - _t0;
       const seen = new Set();
       (res.landmarks || []).forEach((lms, i) => {
         seen.add(i);
@@ -2115,8 +2170,21 @@ async function boot() {
         // signature admits — contrast (frontal) OR far-thumb (profile).
         // Every correct sample passes at least one; every impostor
         // sampled passes neither.
+        // 2026-08-23 — THE CURLED-PINCH LANE (clinic-fitted to this
+        // user's hand: his natural pinch reaches the INDEX out to the
+        // thumb and folds middle/ring/pinky IN — the contrast law's
+        // exact mirror (contrast −0.58), so the old lanes could never
+        // admit it). P-corpus: pinch t 0.64–0.70 / aspect 2.80–3.41;
+        // fist t 0.12–0.52 (median 0.16) / aspect 2.06–2.63. Both
+        // metrics hold a clean canyon; cut mid-canyon: t 0.58, aspect
+        // 2.7. Curls/arches do NOT separate here (occluded fist
+        // fingers flicker, c8 −0.91…+0.99), so the thumb-off-the-
+        // knuckle-row distance judges, backed by the aspect rail. The
+        // gap ceiling still enforces touch: his near-pinch reads r
+        // 0.44–0.63, far above the 0.32 bar.
         const okBack = (backMean - f8v > 0.18 && backMean > 1.30) ||
-                       (aspect < 2.0 && tRel > 0.95);
+                       (aspect < 2.0 && tRel > 0.95) ||
+                       (tRel > 0.58 && aspect > 2.7);
         // v3.8.3 (his tap report: drag fixed, tap still flaky) — the
         // EMA charged too slow for a snap-tap (~6 frames): rate up to
         // 0.30 = three clean consecutive frames (~100ms) to trust,
@@ -2519,11 +2587,16 @@ async function boot() {
             // only after ~half a second of held pose (14 frames) so a
             // drifting arch never even starts the show. The strain, the
             // 2s law, and the plunge are untouched.
+            // 2026-08-23 (this user's field find: his claw pose PASSED
+            // — the "flash OPEN first" toast kept firing — but he forms
+            // the claw slower than the 900ms transition window): widened
+            // to 1500ms. A drifting arch still never flashes open, so
+            // the transition law's whole point survives.
             if (!heldAny && fp.pose >= 14 && !hitTest(cur) &&
-                now - (cur.lastOpenT || 0) < 900) {
+                now - (cur.lastOpenT || 0) < 1500) {
               fp.ph = 1; fp.lost = 0; fp.tId = null;
             } else if (fp.pose === 20 && !heldAny &&
-                       now - (cur.lastOpenT || 0) >= 900) {
+                       now - (cur.lastOpenT || 0) >= 1500) {
               // the honest tell for a drift-in arch (once per run)
               toast("claw ignored — flash OPEN first, then claw", 1300);
             }
@@ -2539,7 +2612,12 @@ async function boot() {
               // misfire and just drops the lock. The strain ramp peaks
               // at ~2s, so fully-rattling and takeable are the same
               // visible moment.
-              if (now - (fp.litT || 0) >= 2000) {
+              // 2026-08-23 (this user's ruling: he armed it, strained
+              // it, and called the full 2s "too much to do" — for his
+              // hand the ceremony IS the cost): strain cut to 800ms.
+              // The transition law + pose gates still make an
+              // accidental pull nearly impossible.
+              if (now - (fp.litT || 0) >= 800) {
                 const t = items.find(k => k.id === fp.tId);
                 unlight(); fp.ph = 0;
                 if (t && !t.grabbedBy.length && t.el.isConnected) {
@@ -2548,7 +2626,7 @@ async function boot() {
                 }
               } else {
                 unlight(); fp.ph = 0;
-                toast("too soon — let it strain 2 seconds", 900);
+                toast("too soon — let it strain a moment", 900);
               }
             } else if (claw) {
               // v6.4 — the aim ray is the claw MOUTH'S NORMAL (his
@@ -2827,9 +2905,13 @@ async function boot() {
       frames++;
       if (now - lastFpsTs > 1000) { fps = frames; frames = 0; lastFpsTs = now; }
     }
+    const _t1 = performance.now();
     physics(dt);
     renderModels();           // the 3D holograms draw their frames
     renderRings();            // the ring draws its frames (both pages)
+    PERF.loop = 0.9 * PERF.loop + 0.1 * (performance.now() - _t1);
+    if (PERF.lastNow) PERF.raf = 0.9 * PERF.raf + 0.1 * (now - PERF.lastNow);
+    PERF.lastNow = now;
     pushState(now);           // stream the scene to the OBS render page
     requestAnimationFrame(frame);
   }
@@ -2850,6 +2932,8 @@ function pushState(now) {
   if (now - lastPush < 22) return;
   lastPush = now;
   const st = {
+    perf: { det: +PERF.det.toFixed(1), loop: +PERF.loop.toFixed(1),
+            raf: +PERF.raf.toFixed(1), fps, log: window._mpLog || undefined },
     cursors: Object.keys(cursors).sort().map(k => {
       const c = cursors[k];
       return { x: +(c.x / innerWidth).toFixed(4), y: +(c.y / innerHeight).toFixed(4),
