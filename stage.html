@@ -394,6 +394,7 @@ const TUNE_DEFAULTS = {
   face: { everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4,
           blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25 },
   pose: { enabled: false, everyNthFrame: 2, wristTol: 0.12 },
+  image3d: { enabled: true, depth: 0.35, seg: 160, alphaCut: 0.35, rim: 0.9, flat: false },
 };
 function tuneMerge(base, over) {
   const out = Array.isArray(base) ? base.slice() : { ...base };
@@ -564,6 +565,28 @@ function makeImage(src, title) {
   // grab, stretch, fling, give-back, flash-close — works unchanged.
   const fx = /\/fx\//i.test(src);
   const vid = /\.webm(\?|$)/i.test(src);
+  // TASK 13 — IMAGES BECOME 3D: every still image (not .webm) becomes a
+  // luminance-relief three.js scene, exactly like a model — it routes
+  // through the SAME MSCENES tracking, render loop and render-page mirror
+  // as makeModel, so every existing 3D gesture (explode, force-pull,
+  // rotation) just works. ?img2d=1 is the debug escape hatch back to the
+  // flat glass card.
+  if (!vid && TUNE.image3d.enabled && !TUNE.image3d.flat && !Q.get("img2d")) {
+    const el = document.createElement("div");
+    el.className = "card modelcard imgcard3d";
+    el.innerHTML = `<canvas></canvas>`;
+    BEHIND.appendChild(el);
+    const it = { el, id: UID++, type: "model",
+      def: { title: title || "", file: "", src, mmode: "img3d", lift: 0,
+             fx: fx ? 1 : 0 },
+      x: innerWidth * 0.5, y: innerHeight * 0.42, scale: 1,
+      rx: -0.05, ry: 0.35, rz: 0, rvy: 0, vx: 0, vy: 0,
+      grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
+    buildImageScene(el, src, { fx }).then(sc => {
+      if (sc) { sc.it = it; MSCENES.set(it.id, sc); }
+    });
+    return it;
+  }
   const el = document.createElement("div");
   el.className = "card imgcard" + (fx || vid ? " fxcard" : "");
   el.innerHTML = vid
@@ -1210,6 +1233,165 @@ async function buildModelScene(el, src, mm, lift) {
     _three = null;                          // let a retry re-import
     if (ROLE !== "render")
       toast("3D failed: " + (e.message || "load error"), 3000);
+    return null;
+  }
+}
+
+// TASK 13 — IMAGES BECOME 3D: a luminance relief, the same scene-object
+// contract as buildModelScene (renderModels/renderLoop/applyExplode/
+// disposeScene read it identically — the fields only meaningful for glTF,
+// mixer/ghostMat/exParts, are set to safe no-op values). No ML, no
+// download: the image's own brightness pushes a subdivided plane toward
+// the viewer (bright = closer); alpha < alphaCut carves a hole in the
+// TRIANGLES (not just the height), so a transparent-PNG prop keeps its
+// true silhouette instead of staying a rectangle.
+async function buildImageScene(el, src, opts) {
+  opts = opts || {};
+  const fx = !!opts.fx;
+  try {
+    const { THREE, RoomEnvironment } = await loadThree();
+    const canvas = el.querySelector("canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true,
+                                               antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    renderer.setSize(MODEL_PX, MODEL_PX, false);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.82;      // same solid-model exposure
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+    camera.position.set(0, 0, 3.2);           // same 35° / distance as models
+
+    // THE RELIEF BUILD — once per image, never per frame: decode into an
+    // offscreen canvas capped at 512px on the long edge and read the
+    // pixels ONCE. Every later re-render (explode/force-pull/rotate) just
+    // redraws the already-built mesh, so the per-frame cost is identical
+    // to a model scene.
+    const img = await new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => res(im);
+      im.onerror = () => rej(new Error("image decode failed"));
+      im.src = src;
+    });
+    const iw = img.naturalWidth || img.width || 1,
+          ih = img.naturalHeight || img.height || 1;
+    const IMG_PX = 512;
+    const down = Math.min(1, IMG_PX / Math.max(iw, ih));
+    const cw = Math.max(1, Math.round(iw * down)),
+          ch = Math.max(1, Math.round(ih * down));
+    const off = document.createElement("canvas");
+    off.width = cw; off.height = ch;
+    const octx = off.getContext("2d");
+    octx.drawImage(img, 0, 0, cw, ch);
+    const idata = octx.getImageData(0, 0, cw, ch).data;
+
+    const T = TUNE.image3d || {};
+    const depth = T.depth ?? 0.35, seg = Math.max(1, T.seg || 160),
+          alphaCut = T.alphaCut ?? 0.35, rim = T.rim ?? 0.9;
+
+    // plane sized to the image's own aspect, long edge = 2 units (the
+    // model path's box-fit below scales it to fill the card the same way
+    // a model's bounding box does)
+    const longEdge = 2;
+    const w = iw >= ih ? longEdge : longEdge * iw / ih;
+    const h = iw >= ih ? longEdge * ih / iw : longEdge;
+    const geo = new THREE.PlaneGeometry(w, h, seg, seg);
+    const posAttr = geo.attributes.position, uvAttr = geo.attributes.uv;
+    const holes = new Uint8Array(posAttr.count);
+    for (let i = 0; i < posAttr.count; i++) {
+      const u = uvAttr.getX(i), v = uvAttr.getY(i);
+      // CanvasTexture keeps three's default flipY, so v=0 is the BOTTOM
+      // of the source image — this must match that same flip or the
+      // relief and the painted texture disagree about which way is up.
+      const px = Math.min(cw - 1, Math.max(0, Math.round(u * (cw - 1))));
+      const py = Math.min(ch - 1, Math.max(0, Math.round((1 - v) * (ch - 1))));
+      const o = (py * cw + px) * 4;
+      const r = idata[o] / 255, g = idata[o + 1] / 255,
+            b = idata[o + 2] / 255, a = idata[o + 3] / 255;
+      if (a < alphaCut) holes[i] = 1;
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      posAttr.setZ(i, lum * depth * (h / 2));
+    }
+    // carve the silhouette: a triangle survives only if none of its three
+    // vertices is a hole — setting z alone would keep the rectangle
+    const srcIdx = geo.index.array;
+    const keepIdx = [];
+    for (let i = 0; i < srcIdx.length; i += 3) {
+      const a = srcIdx[i], b = srcIdx[i + 1], c = srcIdx[i + 2];
+      if (holes[a] || holes[b] || holes[c]) continue;
+      keepIdx.push(a, b, c);
+    }
+    geo.setIndex(keepIdx);
+    posAttr.needsUpdate = true;
+    geo.computeVertexNormals();
+
+    const texture = new THREE.CanvasTexture(off);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+
+    const mat = new THREE.MeshStandardMaterial({
+      map: texture, roughness: 0.55, metalness: 0.05,
+      transparent: fx, alphaTest: fx ? alphaCut : 0, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geo, mat);
+
+    // THE RIM — a second additive pass sharing the same geometry (safer
+    // than patching MeshStandardMaterial's internal shader chunks via
+    // onBeforeCompile across three.js versions): the exact fresnel formula
+    // and teal (0.75, 1.0, 0.96) the ghost-glass hologram shader uses, so
+    // an image rim-glows the same color a holo model does.
+    const rimMat = new THREE.ShaderMaterial({
+      uniforms: { cRim: { value: new THREE.Color(0.75, 1.0, 0.96) },
+                  rimPow: { value: 3.0 }, rimA: { value: rim } },
+      vertexShader: `
+        varying vec3 vN; varying vec3 vV;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vN = normalize(normalMatrix * normal);
+          vV = normalize(-mv.xyz);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        uniform vec3 cRim; uniform float rimPow; uniform float rimA;
+        varying vec3 vN; varying vec3 vV;
+        void main() {
+          float f = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), rimPow);
+          gl_FragColor = vec4(cRim, f * rimA);
+        }`,
+      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending });
+    const rimMesh = new THREE.Mesh(geo, rimMat);
+    rimMesh.renderOrder = 1;
+
+    const group = new THREE.Group();
+    group.add(mesh); group.add(rimMesh);
+    scene.add(group);
+
+    // frame it exactly like the model path: measure, center, fit
+    const box = new THREE.Box3().setFromObject(mesh);
+    const center = box.getCenter(new THREE.Vector3());
+    mesh.position.sub(center); rimMesh.position.sub(center);
+    const bsz = box.getSize(new THREE.Vector3());
+    const fit = 1.3 / (bsz.length() || 1);
+    group.scale.setScalar(fit);
+
+    // lit like a solid model: RoomEnvironment PMREM + ambient + one key
+    scene.environment = new THREE.PMREMGenerator(renderer)
+      .fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.add(new THREE.AmbientLight(0xffffff, 0.28));
+    const key = new THREE.DirectionalLight(0xffffff, 1.1);
+    key.position.set(2, 3, 4);
+    scene.add(key);
+    mat.envMapIntensity = 0.65;
+
+    // reuse the model path's bloom rig so the rim catches real bloom
+    const post = buildBloomRig(THREE, renderer, { k: 0.9, sat: 1.4, spread: 2.0 });
+
+    return { renderer, scene, camera, group, canvas, mixer: null, post, THREE,
+             ghostMat: null, exParts: [], exSpread: 0, exC: 0,
+             bufSize: Math.round(MODEL_PX * Math.min(devicePixelRatio || 1, 2)) };
+  } catch (e) {
+    _three = null;                          // let a retry re-import
+    if (ROLE !== "render")
+      toast("3D image failed: " + (e.message || "load error"), 3000);
     return null;
   }
 }
@@ -4169,9 +4351,12 @@ async function renderLoop() {
         let el;
         if (it.type === "model") {
           // Build 1: the render page runs its OWN three.js scene per
-          // hologram and lerps toward the tracker's rotation
+          // hologram and lerps toward the tracker's rotation. Task 13:
+          // mmode "img3d" is a staged image's luminance relief — same
+          // item type, same mirroring, so it needs no wiring beyond this.
           el = document.createElement("div");
-          el.className = "card modelcard" + (it.mm === "holo" ? " holo" : "");
+          el.className = "card modelcard" + (it.mm === "holo" ? " holo" : "") +
+                          (it.mm === "img3d" ? " imgcard3d" : "");
           el.innerHTML = `<canvas></canvas>`;
         } else if (it.type === "widget") {
           el = document.createElement("div");    // THE RING, self-animating
@@ -4214,7 +4399,9 @@ async function renderLoop() {
                                y: it.y * innerHeight, s: it.scale || 1,
                                fv: it.fv };   // no flash replay on page load
         if (it.type === "model")
-          buildModelScene(el, it.src, it.mm, it.lf).then(sc => { ri.msc = sc; });
+          (it.mm === "img3d" ? buildImageScene(el, it.src, { fx: !!it.fxf })
+                              : buildModelScene(el, it.src, it.mm, it.lf))
+            .then(sc => { ri.msc = sc; });
         if (it.type === "widget" && it.w === "ring")
           RINGS.set(it.id, ringCanvas(el));   // the ring animates locally
       }
