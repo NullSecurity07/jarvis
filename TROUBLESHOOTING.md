@@ -55,6 +55,13 @@ The camera, not the code, sets the frame rate: a webcam's auto-exposure with *dy
 
 **The camera clinic (K).** Don't guess which exposure state detects better — measure it. Press **K** (or `POST /cmd {"a":"clinic"}`), keep ONE open hand in frame, and follow the toasts (hold still, then wave slowly) through five states (~40 s). You get a table — per state: fps, detection rate still/moving, fingertip jitter raw vs smoothed (‰ of the hand's span), hand-zone luma, the software lift, inference ms — as a 25 s toast, on the D overlay, in `GET /state → perf.clinic`, and as a CAMERA CLINIC card on the board. If FAST's detection rate or jitter is clearly worse than LIGHT's in your room, that is your answer: `L` to LIGHT, or more light on your hands.
 
+## Force-pull and clap: what the tape taught (2026-08-23)
+
+- **The claw coach.** After you flash OPEN, if your hand is claw-ish but the gate refuses, a toast names the missing piece ("hook the INDEX too", "fold middle + ring into half-hooks", "open the C wider"…). No threshold moved; the gate just stopped refusing in silence.
+- **The forgiving aim.** Once armed, the aim cone is ~30° (scored by angle), and if the board holds exactly one pull-able item, that item is the target whichever way the C faces. Pull-able = cards, images, models, folder panes; orbs and open notes stay out (the author's rule). If the ring is the only thing on the board, the ring is what you pull.
+- **The strike read.** A real clap happens *between* frames and pressed palms are no hand to the tracker, so the old contact read rarely saw it. Now: two open, upright hands that were apart, closing fast (≥500 px/s), then both vanish = clap. Every detected clap flashes the screen edge teal and toasts `clap (strike|contact)`; `GET /state → perf.clapN/clapT/clapHow` counts them.
+- **The tape.** `POST /cmd {"a":"dump"}` writes the last ~3 minutes of per-frame hand anatomy (pinch ratio, curls, hooks, claw flag, held-pose clock, arm/aim/lit state, clap wrist distance + uprightness) to `state/tape.json`. Read it before moving any number.
+
 ## The hands: identity, grace, smoothing
 
 MediaPipe hands the tracker an array each frame; the tracker keeps each hand's identity across frames by wrist distance (handedness only breaks ties), never reuses an id, keeps a vanished hand as a ghost for 200 ms (its item stays parked; a hand that blinks out fires no tap and no fling), and passes every landmark through a One-Euro filter (steady at rest, sharp in motion). `?smooth=0` bypasses the filter for A/B. None of the gesture thresholds moved — they just read steadier numbers.
