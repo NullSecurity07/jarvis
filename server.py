@@ -98,7 +98,7 @@ _STATE = b"{}"          # latest scene state: tracker POSTs, render GETs
 _CMDS = []              # queued board commands (your AI -> tracker)
 _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
             "yank", "hover", "scroll_note", "widget", "explode", "assemble",
-            "present")
+            "present", "clinic", "light")
 
 # ---- THE CAMERA BRIDGE (/cam). Chrome can't reach every V4L2 control
 # (exposure_dynamic_framerate, the ROI metering pair), and those are the
