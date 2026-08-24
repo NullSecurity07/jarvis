@@ -113,12 +113,14 @@ Your AI drives the ring by writing tiny files into ./state/ :
 Missing files are fine — the ring just idles.
 """
 import collections
+import io
 import json
 import mimetypes
 import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -474,14 +476,24 @@ _DESK_BROWSER_CLASS = {"google-chrome", "chromium", "chromium-browser", "chrome"
 _DESK_LOCK = threading.Lock()
 _DESK_CACHE = {}          # xid -> {"t": monotonic, "png": bytes}
 _DESK_STREAMS = 0         # concurrent /desks/stream connections
-# Task 19: measured — maim -i <xid> captures the screen REGION the window
-# occupies, not the window's own contents, so on a workspace that isn't
-# currently visible it returns WHATEVER IS ACTUALLY ONSCREEN, not that
-# window. And there's no fallback tool: a window on a hidden i3 workspace
-# is unmapped (WM_STATE Withdrawn) and X11 keeps no backing pixels for an
-# unmapped window, so nothing can read them live. /desks/shot and
-# /desks/stream below therefore never call maim for a non-capturable
-# window; they serve the last cached frame (honestly aged) or refuse.
+# CORRECTION (Task 22 supersedes Task 19's diagnosis). Task 19 concluded
+# that maim -i <xid> captures the screen REGION a window occupies rather
+# than the window itself. That was wrong, and the test that "proved" it
+# was confounded: the window under test had been unmapped by i3 (a
+# sibling went fullscreen), so the capture fell back to the root
+# framebuffer. Re-tested properly — a green window deliberately covered
+# by a floating blue one, with the root pixel at its centre confirmed
+# blue — both maim and XComposite returned pure GREEN. Covered windows
+# capture fine.
+#
+# The real and only hard limit is that an UNMAPPED window has no pixels
+# anywhere: i3 unmaps every window on a hidden workspace (WM_STATE
+# Withdrawn) and also unmaps tiled windows that a fullscreen sibling
+# covers. Nothing can read those, so /desks/shot and /desks/stream serve
+# the last cached frame (honestly aged) or refuse. What changed is the
+# GATE: it is now WM_STATE, not "is its workspace visible" — see
+# _desks_mapped — which is what lets a window behind the floating glass
+# board stream live.
 # While hidden, /desks/stream re-emits the cached frame at this rate so
 # the connection stays alive and the client can see the age advance
 # (chosen over emitting nothing so a slow poller still sees progress).
@@ -555,13 +567,31 @@ def _desks_snapshot():
                 board_ws = ws_num
             if not is_board and cls_l not in _DESK_EXCLUDE_CLASS:
                 rect = n.get("rect") or {}
-                capturable = bool(vis_by_num.get(ws_num))
+                # Task 22: capturable == the window is actually MAPPED,
+                # asked of X directly (~0.03 ms). The old rule — "its
+                # workspace is visible" — was wrong in both directions: a
+                # tiled window whose sibling went fullscreen is unmapped
+                # on a VISIBLE workspace (so we'd try and get nothing),
+                # and a window merely covered by the floating glass board
+                # is still mapped and captures perfectly (so we refused a
+                # frame we could have had). If X can't be reached we fall
+                # back to the old heuristic rather than claiming to know.
+                mapped, wm = _desks_mapped(win)
+                capturable = bool(vis_by_num.get(ws_num)) if mapped is None else mapped
                 wins.append({"cid": n.get("id"), "xid": win, "ws": ws_num,
                             "cls": cls, "title": title,
                             "w": rect.get("width"), "h": rect.get("height"),
                             "focused": bool(n.get("focused")),
-                            "visible": capturable,
-                            "capturable": capturable})
+                            # "visible" = the user can see it on screen
+                            # right now (its workspace is showing);
+                            # "capturable" = we can read its pixels. They
+                            # are no longer the same thing, and the split
+                            # is the point: a window behind the glass is
+                            # capturable but not visible, which is exactly
+                            # the case that makes live desks worth having.
+                            "visible": bool(vis_by_num.get(ws_num)),
+                            "capturable": capturable,
+                            "wm": wm})
         for c in n.get("nodes", []) + n.get("floating_nodes", []):
             walk(c, ws_num)
     if isinstance(tree, dict):
@@ -616,50 +646,155 @@ def _desks_ws_visible_set():
 
 
 def _desks_cache_peek(xid):
-    """The cached (png, age_ms) for xid without ever touching maim, or
-    (None, None) if nothing was ever captured. Used by the not-capturable
-    path in /desks/shot and /desks/stream — that path must NEVER call
-    _desks_capture, which can itself trigger a fresh (wrong-region) maim."""
+    """The cached (bytes, age_ms, mime) for xid without capturing, or
+    (None, None, None) if nothing was ever captured. Used by the
+    not-capturable path in /desks/shot and /desks/stream — an unmapped
+    window's last known frame, aged honestly."""
     with _DESK_LOCK:
         c = _DESK_CACHE.get(xid)
         if not c:
-            return None, None
-        return c["png"], int((time.monotonic() - c["t"]) * 1000)
+            return None, None, None
+        return c["png"], int((time.monotonic() - c["t"]) * 1000), c["mime"]
+
+
+# ---- THE CAPTURE BACKEND (Task 22). Two measured facts replaced maim
+# here, both on this machine, both reproducible with tools/wincap.py:
+#
+#   1. maim -i <xid> costs 361 ms and 2.0 MB of PNG for one 1920x1080
+#      window. XComposite + a box downscale + JPEG costs 15 ms and 26 KB.
+#      That is 24x the speed and 1/80th the bytes: maim alone capped the
+#      whole desks feature at ~2 fps TOTAL across every card, which is
+#      most of why live desks felt like still images even when they were
+#      technically live.
+#   2. maim is NOT region-based after all (Task 19's conclusion was
+#      wrong): it reads the compositor's per-window pixmap like we now do,
+#      so a COVERED window captures correctly. What actually breaks
+#      capture is the window being UNMAPPED — and i3 unmaps a window both
+#      on a hidden workspace AND when a sibling goes fullscreen. So the
+#      real gate is WM_STATE, not "is its workspace visible", and a
+#      screen-covering FLOATING board (which is what launch-hud.sh makes)
+#      leaves everything behind it mapped and perfectly capturable.
+#
+# One X connection is shared under _DESK_X_LOCK: Xlib is not thread-safe,
+# and this server is threaded. On any error the connection is dropped so
+# the next call reopens it (X restarts, display comes back).
+_DESK_X_LOCK = threading.Lock()
+_DESK_X = None            # tools.wincap.Capture, lazily opened
+_DESK_X_OFF = False       # True once we know wincap can't work here at all
+
+
+def _desks_x():
+    """The shared wincap.Capture, or None if wincap is unusable here (no
+    Pillow, no libX11, no display) — callers fall back to maim."""
+    global _DESK_X, _DESK_X_OFF
+    if _DESK_X_OFF:
+        return None
+    if _DESK_X is None:
+        try:
+            sys.path.insert(0, str(HERE / "tools"))
+            import wincap
+            os.environ.setdefault("DISPLAY", _desks_env()["DISPLAY"])
+            os.environ.setdefault("XAUTHORITY", _desks_env()["XAUTHORITY"])
+            _DESK_X = wincap.Capture(_desks_env()["DISPLAY"])
+            if not _DESK_X.have_composite:
+                # without the Composite extension the window drawable
+                # reads back whatever is painted over it — the wrong-region
+                # trap for real this time. Refuse rather than lie.
+                _DESK_X.close()
+                _DESK_X, _DESK_X_OFF = None, True
+                print("desks: X has no Composite extension — window capture off", flush=True)
+                return None
+        except Exception as e:
+            _DESK_X, _DESK_X_OFF = None, True
+            print("desks: wincap unavailable (%s) — falling back to maim" % e, flush=True)
+            return None
+    return _DESK_X
+
+
+def _desks_x_drop():
+    global _DESK_X
+    with _DESK_X_LOCK:
+        try:
+            if _DESK_X:
+                _DESK_X.close()
+        except Exception:
+            pass
+        _DESK_X = None
+
+
+def _desks_mapped(xid):
+    """(mapped, wm_state) straight from X — the ONE thing that decides
+    whether this window can be captured at all. ~0.03 ms, so the stream
+    loop can afford it every tick. (None, "?") if X is unreachable, which
+    callers must treat as "don't know", not "no"."""
+    with _DESK_X_LOCK:
+        c = _desks_x()
+        if c is None:
+            return None, "?"
+        try:
+            m, _w, _h, st = c.state(xid)
+            return m, st
+        except Exception:
+            pass
+    _desks_x_drop()
+    return None, "?"
 
 
 def _desks_capture(xid, force=False):
-    """maim -i <xid> -f png /dev/stdout -> (png_bytes_or_None, ok). Cached
-    per-xid for desks.minGapMs so a burst of shot/stream hits on the same
-    window doesn't restart the ~70ms capture on every request. ok=False
-    means the FRESH capture failed — png is the last good frame if one
-    was ever captured, else None (the caller turns that into a 503).
-    force=True skips the minGapMs cache hit (peek's post-switch capture
-    needs a REAL fresh frame, not whatever — possibly stale/wrong — frame
-    happened to be cached from just before the workspace switch).
-    Callers MUST confirm the window is capturable before calling this —
-    it always runs maim, which is exactly the wrong-region trap Task 19
-    fixes; see _desks_cache_peek for the not-capturable path instead."""
-    gap = int(config().get("desks", {}).get("minGapMs", 180)) / 1000
+    """Capture xid -> (bytes_or_None, ok, mime). Cached per-xid for
+    desks.minGapMs so a burst of shot/stream hits on one window doesn't
+    redo the work per request. ok=False means the FRESH capture failed —
+    bytes are the last good frame if one was ever taken, else None (the
+    caller turns that into a 503). force=True skips the minGapMs cache.
+
+    Callers MUST confirm the window is mapped first (_desks_mapped): an
+    unmapped window has no pixmap and nothing can read one."""
+    d = config().get("desks", {})
+    gap = int(d.get("minGapMs", 180)) / 1000
     now = time.monotonic()
     if not force:
         with _DESK_LOCK:
             c = _DESK_CACHE.get(xid)
             if c and now - c["t"] < gap:
-                return c["png"], True
-    png = None
-    try:
-        r = subprocess.run(["maim", "-i", str(xid), "-f", "png", "/dev/stdout"],
-                           capture_output=True, timeout=3, env=_desks_env())
-        if r.returncode == 0 and r.stdout[:8] == b"\x89PNG\r\n\x1a\n":
-            png = r.stdout
-    except Exception:
-        png = None
+                return c["png"], True, c["mime"]
+
+    buf, mime = None, "image/jpeg"
+    shrink = max(1, min(8, int(d.get("shrink", 3))))
+    quality = max(20, min(95, int(d.get("quality", 70))))
+    broken = False          # the X connection itself misbehaved, not the window
+    with _DESK_X_LOCK:
+        c = _desks_x()
+        if c is not None:
+            try:
+                im, _src = c.grab(xid)
+                if shrink > 1 and im.width > shrink and im.height > shrink:
+                    im = im.reduce(shrink)   # box filter: fastest good downscale
+                b = io.BytesIO()
+                im.save(b, "JPEG", quality=quality)
+                buf = b.getvalue()
+            except LookupError:
+                pass            # unmapped / gone — expected, not a fault
+            except Exception:
+                broken = True   # reopen the display before the next attempt
+    if broken:
+        _desks_x_drop()
+
+    if buf is None and _desks_x() is None:
+        # last resort on a box without Composite/Pillow: the old path.
+        try:
+            r = subprocess.run(["maim", "-i", str(xid), "-f", "png", "/dev/stdout"],
+                               capture_output=True, timeout=3, env=_desks_env())
+            if r.returncode == 0 and r.stdout[:8] == b"\x89PNG\r\n\x1a\n":
+                buf, mime = r.stdout, "image/png"
+        except Exception:
+            buf = None
+
     with _DESK_LOCK:
-        if png:
-            _DESK_CACHE[xid] = {"t": now, "png": png}
-            return png, True
+        if buf:
+            _DESK_CACHE[xid] = {"t": now, "png": buf, "mime": mime}
+            return buf, True, mime
         c = _DESK_CACHE.get(xid)
-        return (c["png"] if c else None), False
+        return ((c["png"], False, c["mime"]) if c else (None, False, mime))
 
 
 def cam_dev():
@@ -1253,7 +1388,8 @@ class Handler(SimpleHTTPRequestHandler):
                 # verb ships until something in the page actually needs
                 # it; kill sits in the same "not here" bucket for the
                 # same reason.
-                if a not in ("workspace", "focus", "fullscreen", "peek"):
+                if a not in ("workspace", "focus", "fullscreen", "peek",
+                             "bring", "send"):
                     raise ValueError("unknown action")
                 snap = _desks_snapshot()
                 if a == "workspace":
@@ -1272,6 +1408,44 @@ class Handler(SimpleHTTPRequestHandler):
                     if cid is None or not any(w["cid"] == cid for w in snap["wins"]):
                         raise ValueError("unknown cid")
                     _i3(f"[con_id={cid}]", "fullscreen", "toggle")
+                elif a in ("bring", "send"):
+                    # THE POINT OF THE WHOLE THING (Task 22). A window on
+                    # another workspace is unmapped, so no frame of it
+                    # exists to show — "peek" below only papers over that
+                    # with a flickering workspace round-trip. "bring"
+                    # fixes it properly: move that window onto the
+                    # BOARD's workspace, where the glass floats over it.
+                    # It is then mapped-but-covered, which captures
+                    # perfectly (measured), so its card goes genuinely
+                    # live. "send" is the undo — put it back somewhere
+                    # else so your real screen isn't a pile of windows.
+                    #
+                    # This is deliberately NOT the general `move` verb the
+                    # earlier round refused: the DESTINATION is never
+                    # taken from the request. "bring" always targets the
+                    # board's own workspace as the server itself observed
+                    # it, and "send" only accepts a workspace already in
+                    # the live i3 tree. The caller chooses which window
+                    # moves, never where it can end up.
+                    xid = _desks_int(cmd.get("xid"))
+                    win = next((w for w in snap["wins"] if w["xid"] == xid), None)
+                    if win is None:
+                        raise ValueError("unknown xid")
+                    if a == "bring":
+                        dest = snap.get("boardWs")
+                        if not isinstance(dest, int) or dest <= 0:
+                            raise ValueError("board workspace unknown")
+                    else:
+                        dest = cmd.get("n")
+                        if not _desks_valid_ws_ref(dest, snap):
+                            raise ValueError("unknown workspace")
+                    ref = ["number", str(dest)] if isinstance(dest, int) else [str(dest)]
+                    _i3(f"[con_id={win['cid']}]", "move", "container",
+                        "to", "workspace", *ref)
+                    # i3 gives a moved-in window focus-follows semantics
+                    # depending on config; the board must not lose the
+                    # floating stack position it needs to stay on top, so
+                    # nothing else is touched here — no focus, no layout.
                 elif a == "peek":
                     # THE DESKS' one way to refresh a HIDDEN window (Task
                     # 19): a window on a non-visible workspace can't be
@@ -1536,20 +1710,21 @@ class Handler(SimpleHTTPRequestHandler):
             # only truthful things to serve are the last-seen frame
             # (honestly aged) or nothing at all.
             if not win["capturable"]:
-                png, age_ms = _desks_cache_peek(xid)
+                png, age_ms, mime = _desks_cache_peek(xid)
                 if png is None:
-                    self._json({"err": "not visible", "ws": win["ws"]}, 409)
+                    self._json({"err": "not mapped", "ws": win["ws"],
+                                "wm": win.get("wm")}, 409)
                     return
-                self._raw(png, 200, "image/png",
+                self._raw(png, 200, mime,
                           extra={"X-Jarvis-Live": "0",
                                  "X-Jarvis-Age-Ms": str(age_ms)})
                 return
-            png, ok = _desks_capture(xid)
+            png, ok, mime = _desks_capture(xid)
             if png is None:
                 self._json({"err": "capture failed"}, 503)
                 return
-            _, age_ms = _desks_cache_peek(xid)
-            self._raw(png, 200 if ok else 503, "image/png",
+            _, age_ms, _m = _desks_cache_peek(xid)
+            self._raw(png, 200 if ok else 503, mime,
                       extra={"X-Jarvis-Live": "1" if ok else "0",
                              "X-Jarvis-Age-Ms": str(age_ms if age_ms is not None else 0)})
             return
@@ -1592,9 +1767,18 @@ class Handler(SimpleHTTPRequestHandler):
                     # still call maim and serve the NEW visible window's
                     # region under this window's label — exactly the bug
                     # the user caught.
-                    capturable = win_ws in _desks_ws_visible_set()
+                    # Task 22: ask X whether the window is MAPPED (0.03 ms,
+                    # no subprocess at all — the old check shelled out to
+                    # i3-msg every tick). This is both cheaper and more
+                    # correct than "is its workspace visible": it stays
+                    # live for a window merely covered by the glass, and
+                    # goes honest the instant i3 unmaps it, whether that's
+                    # a workspace switch or a sibling going fullscreen.
+                    mapped, _wm = _desks_mapped(xid)
+                    capturable = (win_ws in _desks_ws_visible_set()
+                                  if mapped is None else mapped)
                     if capturable:
-                        png, ok = _desks_capture(xid)
+                        png, ok, mime = _desks_capture(xid)
                         # fix round 2: a closed window's stream used to
                         # just keep re-sending its last cached frame (or
                         # nothing) forever, silently occupying one of only
@@ -1617,8 +1801,8 @@ class Handler(SimpleHTTPRequestHandler):
                             win_ws = fresh["ws"]
                         if png:
                             self.wfile.write(
-                                b"--jarvisframe\r\nContent-Type: image/png\r\n"
-                                b"Content-Length: " + str(len(png)).encode() +
+                                b"--jarvisframe\r\nContent-Type: " + mime.encode() +
+                                b"\r\nContent-Length: " + str(len(png)).encode() +
                                 b"\r\n\r\n" + png + b"\r\n")
                             self.wfile.flush()
                         time.sleep(period)
@@ -1639,11 +1823,11 @@ class Handler(SimpleHTTPRequestHandler):
                             win_ws = fresh["ws"]
                         if now - last_hidden_emit >= _DESK_HIDDEN_EMIT_S:
                             last_hidden_emit = now
-                            png, _ = _desks_cache_peek(xid)
+                            png, _age, mime = _desks_cache_peek(xid)
                             if png:
                                 self.wfile.write(
-                                    b"--jarvisframe\r\nContent-Type: image/png\r\n"
-                                    b"Content-Length: " + str(len(png)).encode() +
+                                    b"--jarvisframe\r\nContent-Type: " + mime.encode() +
+                                    b"\r\nContent-Length: " + str(len(png)).encode() +
                                     b"\r\n\r\n" + png + b"\r\n")
                                 self.wfile.flush()
                         time.sleep(min(period, 0.5))
