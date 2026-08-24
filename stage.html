@@ -276,8 +276,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      the moment one arrives (see deskFitAspect) — the card was letterboxing
      and the source was smaller than the card, so it sat pillarboxed in the
      middle at its natural size instead of filling. */
-  .panel.desk { width:1120px; height:666px; }
-  .panel.desk .body { display:flex; align-items:center; justify-content:center;
+  /* 16:9 body (1280x720) plus the title bar. deskFitAspect then trims the
+     height to the frame's REAL aspect once one arrives — a 1920x1044
+     window is 1.84, not 1.78, and the difference is a visible bar. */
+  /* Task 30: width only — the height follows the BODY, which is sized to
+     the frame's exact aspect by deskFitAspect. Sizing the CARD instead
+     meant guessing the bar's height (42px padding, ~103px total) and the
+     1.5px borders, and being wrong by exactly that much every time. */
+  .panel.desk { width:1280px; height:auto; }
+  .panel.desk .body { flex:none; display:flex; align-items:center; justify-content:center;
                       padding:0; overflow:hidden; background:#04100e; position:relative; }
   /* fills the body exactly — the CARD is sized to the frame's aspect, so
      filling cannot distort, and the img's box stays equal to the displayed
@@ -344,10 +351,19 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      in the pointer's own amber, and never let it show the pinched state,
      which cannot happen for an armed hand anyway now that pinch is
      cleared for it. The REAL system cursor is the feedback that matters. */
-  .cursor.ptrmode { width:12px; height:12px; margin:-6px 0 0 -6px;
+  /* Task 30: while armed, the REAL system cursor is already showing
+     where you are aiming, and a second marker next to it just reads as
+     two cursors — the user: "the mouse cursor also is present which
+     confuses". So the glass dot is hidden by default and only appears
+     when the finger is over a DESK CARD, where the real cursor has
+     jumped away into that window and the dot is the only thing showing
+     where your hand actually is. */
+  .cursor.ptrmode { display:none; }
+  .cursor.ptrmode.ondesk { display:block;
+                    width:14px; height:14px; margin:-7px 0 0 -7px;
                     border-color:rgba(255,200,110,0.95);
-                    background:rgba(255,200,110,0.25);
-                    box-shadow:0 0 10px rgba(255,190,90,0.5); transform:none; }
+                    background:rgba(255,200,110,0.3);
+                    box-shadow:0 0 12px rgba(255,190,90,0.6); transform:none; }
   .cursor.ptrmode.pinched { background:rgba(255,200,110,0.25); transform:none;
                             box-shadow:0 0 10px rgba(255,190,90,0.5); }
   .cursor.ptrmode .dwell { display:none; }
@@ -942,6 +958,10 @@ function hudPointerTick(now) {
       if (it.type === "desk" && it.el)
         it.el.classList.toggle("ctl", !!hit && it.id === hit.it.id);
   }
+  cur.el.classList.toggle("ondesk", !!hit);
+  if (hit) HUD.cardBox = [Math.round(hit.it.el.offsetWidth),
+                          Math.round(hit.it.el.offsetHeight),
+                          hit.it.natW || 0, hit.it.natH || 0];
   const sx = hit ? hit.sx : Math.round(px0 + offX);
   const sy = hit ? hit.sy : Math.round(py0 + offY);
   const dx = HUD.lastSend.x == null ? 999 : sx - HUD.lastSend.x;
@@ -2787,15 +2807,37 @@ function deskFitAspect(it, img) {
   // resized, so do the work only then.
   if (it._fitW === nw && it._fitH === nh) return;
   it._fitW = nw; it._fitH = nh;
-  const bar = it.el.querySelector(".bar");
-  const barH = bar ? bar.getBoundingClientRect().height / (it.scale || 1) : 0;
-  const w = parseFloat(getComputedStyle(it.el).width) || 0;
+  const body = it.el.querySelector(".body");
+  if (!body) return;
+  // Size the BODY, not the card. The card's box also contains a bar with
+  // 42px padding and 1.5px borders, so deriving a card height from an
+  // image aspect means guessing that chrome and being wrong by it.
+  // clientWidth is the body's own content width, padding excluded.
+  const w = body.clientWidth;
   if (!w) return;
-  const want = Math.round(w * nh / nw + barH);
-  if (Math.abs((parseFloat(it.el.style.height) || 0) - want) > 1) {
-    it.el.style.height = want + "px";
-    if (typeof retileDesks === "function") retileDesks();
+  const want = Math.round(w * nh / nw);
+  if (Math.abs(body.clientHeight - want) > 2) {
+    body.style.height = want + "px";
+    // AND SET THE SCALE HERE, from the box we just created.
+    //
+    // Going through retileDesks() did not work and the instrumentation
+    // said why: the grid measured NATH = 110 — the card's height before
+    // the body had one, i.e. the title bar alone — because the retile
+    // that won ran at card-creation time, long before the first frame
+    // arrived. Deferring by a frame did not help either. Rather than keep
+    // guessing when layout is ready, measure right here, where the height
+    // was just applied, and set the scale from that. offsetHeight forces
+    // the reflow, so these numbers are the real ones.
+    const cw = innerWidth - 80, ch = innerHeight - 80;
+    const bw2 = it.el.offsetWidth, bh2 = it.el.offsetHeight;
+    if (bw2 && bh2) {
+      const fitS = Math.min(1.6, Math.max(0.3,
+        Math.min(cw / bw2, ch / bh2) * 0.94));
+      it.scale = fitS;
+      if (it.anim && it.anim.k === "tile") it.anim.s1 = fitS;
+    }
   }
+  it.natW = nw; it.natH = nh;
 }
 
 // THE DESKS (fix round 1): the user's headline ask was "see multiple
@@ -2819,9 +2861,19 @@ function desksGridSlots(list) {
   const mx = 40, my = 40;
   const cellW = (innerWidth - mx * (cols + 1)) / cols;
   const cellH = (innerHeight - my * (rows + 1)) / rows;
-  const NATW = 640, NATH = 460;   // .panel.desk's natural (scale-1) size
-  const fit = Math.min(1.3, Math.max(0.35,
-    Math.min(cellW / NATW, cellH / NATH) * 0.92));
+  // MEASURE, DON'T REMEMBER (Task 30). These were hardcoded 640x460 —
+  // the card's size several redesigns ago. The CSS grew to a 16:9 card
+  // and deskFitAspect trims the height per window, so a fixed pair here
+  // computed the scale against dimensions no card has had for a while,
+  // which is why cards came out the wrong shape and size no matter what
+  // the CSS said. offsetWidth/offsetHeight are the UNSCALED layout box
+  // (the scale lives in a transform), which is exactly what this needs.
+  const probe = list[0] && list[0].el;
+  const NATW = (probe && probe.offsetWidth) || 1280;
+  const NATH = (probe && probe.offsetHeight) || 756;
+  window.__gridDbg = { NATW, NATH, cellW: Math.round(cellW), cellH: Math.round(cellH), n };
+  const fit = Math.min(1.6, Math.max(0.35,
+    Math.min(cellW / NATW, cellH / NATH) * 0.94));
   return list.map((it, i) => {
     const col = i % cols, row = Math.floor(i / cols);
     return { it, x: mx + col * (cellW + mx) + cellW / 2,
@@ -4450,9 +4502,22 @@ function physics(dt) {
     const r3 = c.type !== "model" && (c.rx || c.ry || c.rz)
       ? ` rotateX(${c.rx || 0}rad) rotateY(${c.ry || 0}rad) rotateZ(${c.rz || 0}rad)`
       : "";
+    // A DESK CARD NEVER EXCEEDS THE SCREEN (Task 30). The grid computes
+    // its scale once, at card-creation time — before the first frame has
+    // arrived and before the body has any height (instrumented: it
+    // measured a card 110px tall, the title bar alone) — so the scale it
+    // picks is far too large and nothing recomputes it afterwards.
+    // Correcting it at any single later moment kept losing to ordering,
+    // so the ceiling is enforced HERE, every frame, against the box as it
+    // actually is. Cheap: w/h are already measured just above.
+    let sc = c.scale * (c.hs || 1) * (c.inS || 1);
+    if (c.type === "desk" && w > 0 && h > 0) {
+      const cap = Math.min((innerWidth - 40) / w, (innerHeight - 40) / h);
+      if (sc > cap) sc = cap;
+    }
     c.el.style.transform =
       `translate(${c.x - w / 2 + (c.jx || 0)}px, ${c.y - h / 2 + (c.jy || 0)}px)` +
-      r3 + ` scale(${c.scale * (c.hs || 1) * (c.inS || 1)})`;
+      r3 + ` scale(${sc})`;
   });
 }
 
@@ -6219,7 +6284,20 @@ function pushState(now) {
     page: { id: PAGE_ID, mode: MODE, hud: HUD_MODE, role: Q.get("role") || "tracker" },
     hud: { on: HUD_MODE, armed: HUD.armed, hz: (PTR_CFG && PTR_CFG.rateHz) || 90,
            mirror: MIRROR_STEPS[MIRROR_I], overDesk: HUD.overDesk || null,
-           thumb: HUD.thumb == null ? null : HUD.thumb, nOut: HUD.nOut == null ? null : HUD.nOut },
+           thumb: HUD.thumb == null ? null : HUD.thumb, nOut: HUD.nOut == null ? null : HUD.nOut,
+           // the first desk card's real box + the frame's natural size,
+           // reported whether or not a hand is near it, so the sizing can
+           // be verified from a headless page instead of a screenshot
+           card: (() => {
+             const it = items.find(i => i.type === "desk" && i.el);
+             if (!it) return null;
+             const b = it.el.querySelector(".body");
+             return [Math.round(it.el.offsetWidth), Math.round(it.el.offsetHeight),
+                     b ? b.clientWidth : 0, b ? b.clientHeight : 0,
+                     it.natW || 0, it.natH || 0,
+                     Math.round((it.scale || 1) * 100) / 100,
+                     window.__gridDbg || null];
+           })() },
     faces: FACES ? FACES.list().filter(f => f.seenNow).map(f => ({
       id: f.id, role: (LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "unknown",
       x: +f.cx.toFixed(3), y: +f.cy.toFixed(3), w: +f.w.toFixed(3), h: +f.h.toFixed(3),

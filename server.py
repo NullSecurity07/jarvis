@@ -1695,8 +1695,16 @@ class Handler(SimpleHTTPRequestHandler):
                         "res": cfg.get("res"), "fps": cfg.get("fps"),
                         "orbs": orbs,
                         "desksMax": cfg.get("desks", {}).get("maxStreams", 3),
+                        # click/clickHz belong here too (Task 30): the page
+                        # gates its whole mouse-gesture engine on
+                        # PTR_CFG.click, and this endpoint was quietly
+                        # dropping the field — so the engine returned on
+                        # its first line every frame and no click could
+                        # ever fire, however good the gesture was.
                         "pointer": {"enabled": cfg.get("pointer", {}).get("enabled", False),
-                                    "rateHz": cfg.get("pointer", {}).get("rateHz", 90)}})
+                                    "rateHz": cfg.get("pointer", {}).get("rateHz", 90),
+                                    "click": bool(cfg.get("pointer", {}).get("click", False)),
+                                    "clickHz": cfg.get("pointer", {}).get("clickHz", 8)}})
             return
         if path == "/tuning":
             # every hand-fitted number the stage reads at boot. Missing
