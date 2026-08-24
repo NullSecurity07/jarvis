@@ -552,9 +552,10 @@ def _desks_snapshot():
     vis_by_num = {w["num"]: w["visible"] for w in ws}
     wins = []
     board_ws = None
+    board_xid = None
 
     def walk(n, cur_ws):
-        nonlocal board_ws
+        nonlocal board_ws, board_xid
         ws_num = n.get("num") if n.get("type") == "workspace" else cur_ws
         win = n.get("window")
         if win:
@@ -564,7 +565,7 @@ def _desks_snapshot():
             cls_l = cls.lower()
             # Task 22: also recognise our own launchers' WM_CLASS. The
             # browser-class + "jarvis" in title rule missed a board opened
-            # with --class=jarvis-strip (launch-strip.sh sets one so i3
+            # with --class=jarvis-panel (launch.sh sets one so i3
             # rules can target the panel), which silently left boardWs
             # None — and boardWs None is what `bring` needs, so the whole
             # bring-it-behind-the-glass path was dead in strip mode.
@@ -572,6 +573,7 @@ def _desks_snapshot():
                         or cls_l.startswith("jarvis"))
             if is_board and board_ws is None:
                 board_ws = ws_num
+                board_xid = win
             if not is_board and cls_l not in _DESK_EXCLUDE_CLASS:
                 rect = n.get("rect") or {}
                 # Task 22: capturable == the window is actually MAPPED,
@@ -620,7 +622,23 @@ def _desks_snapshot():
         for w in wins:
             c = _DESK_CACHE.get(w["xid"])
             w["cacheAgeMs"] = None if not c else int((now - c["t"]) * 1000)
-    return {"ws": ws, "wins": wins, "boardWs": board_ws}
+    return {"ws": ws, "wins": wins, "boardWs": board_ws,
+            "boardXid": board_xid, "screen": _desks_screen()}
+
+
+def _desks_screen():
+    """(w, h) of the output the board lives on, from i3's own geometry —
+    never a hardcoded 1920x1080. Falls back to a sane default if i3 is
+    unreachable, since this only ever sizes a window."""
+    try:
+        outs = _i3("-t", "get_outputs") or []
+        for o in outs:
+            if o.get("active") and isinstance(o.get("rect"), dict):
+                r = o["rect"]
+                return [int(r.get("width") or 0), int(r.get("height") or 0)]
+    except Exception:
+        pass
+    return [1920, 1080]
 
 
 def _desks_valid_ws_ref(ref, snap):
@@ -679,7 +697,7 @@ def _desks_cache_peek(xid):
 #      capture is the window being UNMAPPED — and i3 unmaps a window both
 #      on a hidden workspace AND when a sibling goes fullscreen. So the
 #      real gate is WM_STATE, not "is its workspace visible", and a
-#      screen-covering FLOATING board (which is what launch-hud.sh makes)
+#      screen-covering FLOATING board (what F's "big" mode makes)
 #      leaves everything behind it mapped and perfectly capturable.
 #
 # One X connection is shared under _DESK_X_LOCK: Xlib is not thread-safe,
@@ -1396,7 +1414,7 @@ class Handler(SimpleHTTPRequestHandler):
                 # it; kill sits in the same "not here" bucket for the
                 # same reason.
                 if a not in ("workspace", "focus", "fullscreen", "peek",
-                             "bring", "send"):
+                             "bring", "send", "panel"):
                     raise ValueError("unknown action")
                 snap = _desks_snapshot()
                 if a == "workspace":
@@ -1439,9 +1457,19 @@ class Handler(SimpleHTTPRequestHandler):
                     if win is None:
                         raise ValueError("unknown xid")
                     if a == "bring":
-                        dest = snap.get("boardWs")
+                        # "HERE" IS WHERE YOU ARE LOOKING. The panel is
+                        # sticky — it shows on every workspace — so its
+                        # own nominal workspace is not a meaningful
+                        # destination. The workspace currently FOCUSED is,
+                        # and it is also the one whose windows are mapped
+                        # and therefore capturable. Still server-observed:
+                        # the request never names a destination.
+                        cur = next((w for w in snap["ws"] if w["focused"]), None)
+                        dest = (cur or {}).get("num")
                         if not isinstance(dest, int) or dest <= 0:
-                            raise ValueError("board workspace unknown")
+                            dest = snap.get("boardWs")
+                        if not isinstance(dest, int) or dest <= 0:
+                            raise ValueError("no workspace to bring it to")
                     else:
                         dest = cmd.get("n")
                         # A NUMBER may name a workspace that doesn't exist
@@ -1467,6 +1495,57 @@ class Handler(SimpleHTTPRequestHandler):
                     # depending on config; the board must not lose the
                     # floating stack position it needs to stay on top, so
                     # nothing else is touched here — no focus, no layout.
+                elif a == "panel":
+                    # THE ONE SURFACE, RESIZED (Task 24). The board is a
+                    # small sticky mirror panel by default so it never
+                    # covers your work. "big" grows it to fill the screen
+                    # for a moment — reading a document on the glass,
+                    # working with live desk cards — and "panel" puts it
+                    # back. Bound to F in the page.
+                    #
+                    # Deliberately a floating move+resize, NEVER i3's
+                    # `fullscreen enable`: a fullscreen window makes i3
+                    # UNMAP its tiled siblings, which is precisely the
+                    # windows whose live frames the big view exists to
+                    # show. Floating leaves them mapped and streaming.
+                    #
+                    # It only ever moves the board's OWN window, the one
+                    # the server identified itself — the request cannot
+                    # name a target.
+                    bxid = snap.get("boardXid")
+                    if not bxid:
+                        raise ValueError("no board window to resize")
+                    mode = cmd.get("mode")
+                    if mode not in ("panel", "big", "toggle"):
+                        raise ValueError("bad mode")
+                    sw, sh = snap.get("screen") or [1920, 1080]
+                    d = config().get("panel", {})
+                    pw = max(200, min(sw, int(d.get("w", 620))))
+                    ph = max(150, min(sh, int(d.get("h", 460))))
+                    gap = max(0, int(d.get("gap", 16)))
+                    if mode == "toggle":
+                        # Decide from the window's ACTUAL width, not a
+                        # remembered flag: the truth survives a server
+                        # restart and reflects the user having resized it
+                        # by hand. Anything past ~70% of the screen counts
+                        # as already big.
+                        cw = 0
+                        with _DESK_X_LOCK:
+                            c = _desks_x()
+                            if c is not None:
+                                try:
+                                    cw = c.state(bxid)[1]
+                                except Exception:
+                                    cw = 0
+                        mode = "panel" if cw > sw * 0.7 else "big"
+                    _i3(f"[id={bxid}]", "floating", "enable")
+                    if mode == "big":
+                        _i3(f"[id={bxid}]", "resize", "set", str(sw), str(sh))
+                        _i3(f"[id={bxid}]", "move", "position", "0", "0")
+                    else:
+                        _i3(f"[id={bxid}]", "resize", "set", str(pw), str(ph))
+                        _i3(f"[id={bxid}]", "move", "position",
+                            str(max(0, sw - pw - gap)), str(max(0, sh - ph - gap)))
                 elif a == "peek":
                     # THE DESKS' one way to refresh a HIDDEN window (Task
                     # 19): a window on a non-visible workspace can't be

@@ -10,7 +10,18 @@ Runs on a webcam, Chrome, and stdlib Python. Hand tracking by [Google MediaPipe]
 ./launch.sh
 ```
 
-That starts `server.py` (if it isn't already up) and opens the board in its own Chrome profile (`~/.local/share/jarvis/chrome`) with the flags that keep the tracker running on any workspace. Manual: `python3 server.py`, then open **http://127.0.0.1:8794/stage.html** in Chrome. There is also a rofi/dmenu entry (`jarvis.desktop`).
+That is the only launcher, on purpose. It starts `server.py` if it isn't up, then opens the board as a **small mirror panel**: you see yourself, your hands and the ring; it sticks to the corner of every workspace; it never covers what you are working on. Your hands drive the real mouse from inside it, and live views of your own windows can be staged on the glass.
+
+| | |
+|---|---|
+| **POINT** (index up, others folded, ~0.7s) | take the mouse |
+| **FIST** | give it back (`Esc` always releases) |
+| **F** | grow the panel to full screen, and back |
+| **M** | mirror brightness · **D** debug overlay |
+
+Size lives in `jarvis.json` under `panel` (`w`, `h`, `gap`), or `JARVIS_W/H/GAP` for one launch. Run it again while it's open and it just focuses the panel instead of opening a second one.
+
+Manual: `python3 server.py`, then open **http://127.0.0.1:8794/stage.html?mode=mirror&hud=1** in Chrome. There is also a rofi/dmenu entry (`jarvis.desktop`).
 
 Tap the ring → orbs bloom → tap an orb → your files unfold on glass.
 
@@ -106,9 +117,9 @@ What genuinely cannot be captured is an **unmapped** window: i3 unmaps every win
 
 For a window that really is unmapped, a card shows the **last frame it ever produced**, honestly aged: `LIVE` (green), `OFF-SCREEN · Nm ago` (grey), or `OFF-SCREEN · tap to bring` with an empty glass frame if nothing was ever captured. Tapping that badge **brings the window here** — moves it onto the board's own workspace, where the glass floats over it, so it stays mapped and streams genuinely live from then on. That replaced the old `peek`, which could only borrow a single frame at the cost of a visible flicker and went stale immediately. (`peek` still exists as the fallback when the server cannot see a board window to bring things to.) Missing the `desks` key entirely, or `"enabled": false`, disables the feature completely: every `/desks*` endpoint 404s, and the orb never appears.
 
-**Do not fullscreen the board.** `launch-hud.sh` deliberately floats it at screen size instead of calling i3's `fullscreen enable`, because a fullscreen window makes i3 unmap its tiled siblings — which is exactly the windows you were trying to watch. Floating keeps them mapped. Measured through a real board covering a live-updating terminal: 45 distinct frames in 5 seconds, 38 KB/s, of the terminal's own content.
+**Nothing here ever i3-fullscreens the board** — `F`'s big mode is a floating move+resize to the screen size. A genuinely fullscreen window makes i3 unmap its tiled siblings, which is exactly the windows you were trying to watch. Floating keeps them mapped. Measured through a real board covering a live-updating terminal: 45 distinct frames in 5 seconds, 38 KB/s, of the terminal's own content.
 
-**Control is limited to i3 commands** — `workspace`, `focus`, `fullscreen`, `peek`, `bring`, `send` — sent through a server-side allowlist, never free-form text. The Desks channel itself has no synthetic mouse or keyboard input, and `kill` is not implemented: gesture-driven window control never closes anything for you. (The HUD, below, is a separate feature — a real synthetic pointer, deliberately scoped to move-only, gated by the owner lock, and off unless you turn it on.) The general `move` verb still isn't in the allowlist, and `layout` isn't either — `layout` acts on whatever happens to be focused rather than a named container, with no undo from the board. `bring` and `send` are the narrow, named slice of `move` that the board actually needs, and they are scoped so the **destination is never taken from the request**: `bring` always targets the board's own workspace as the server itself observed it, and `send` only accepts a workspace already present in the live i3 tree. The caller chooses which window moves, never where it can end up. `peek` (above) is the sole exception carved out for refreshing a hidden window, and it's scoped tightly: it only switches to and back from the one workspace the requested window is already on. Desk cards are their own item type, deliberately flat and un-relief'd — a live desktop rendered as an embossed 3D scene would be unreadable, unlike a staged still image.
+**Control is limited to i3 commands** — `workspace`, `focus`, `fullscreen`, `peek`, `bring`, `send`, `panel` — sent through a server-side allowlist, never free-form text. The Desks channel itself has no synthetic mouse or keyboard input, and `kill` is not implemented: gesture-driven window control never closes anything for you. (The HUD, below, is a separate feature — a real synthetic pointer, deliberately scoped to move-only, gated by the owner lock, and off unless you turn it on.) The general `move` verb still isn't in the allowlist, and `layout` isn't either — `layout` acts on whatever happens to be focused rather than a named container, with no undo from the board. `bring` and `send` are the narrow, named slice of `move` that the board actually needs, and they are scoped so the **destination is never taken from the request**: `bring` always targets the workspace you are currently looking at (the focused one, as the server itself observed it — the panel is sticky, so its own nominal workspace would be meaningless), and `send` takes a workspace number, which i3 will create if it has to, or a name that must already exist. `panel` only ever resizes the board's own window, the one the server identified. The caller chooses which window moves, never where it can end up. `peek` (above) is the sole exception carved out for refreshing a hidden window, and it's scoped tightly: it only switches to and back from the one workspace the requested window is already on. Desk cards are their own item type, deliberately flat and un-relief'd — a live desktop rendered as an embossed 3D scene would be unreadable, unlike a staged still image.
 
 **Privacy.** Every capture is served from `/desks/shot` and `/desks/stream` on localhost only, exactly like everything else here — nothing leaves your machine. The board's own window (and the status bar) are always excluded from the workspace/window list, so the glass never mirrors itself.
 
@@ -116,22 +127,11 @@ For a window that really is unmapped, a card shows the **last frame it ever prod
 
 ## The HUD — pointer follow over your real desktop
 
-The HUD is the half of this that drives your real machine: your hand's tracked position moves the real system pointer, so you point at your actual desktop the way you'd use a mouse in the air.
+Your hand's tracked position moves the real system pointer, so you point at your actual desktop the way you'd use a mouse in the air. This is on by default in the panel `./launch.sh` opens — it is `hud=1` on the URL that enables it, **not** the window's shape or size.
 
-There are two ways to run it, because **Chrome on this machine cannot produce a per-pixel transparent window** — tested with and without `--enable-transparent-visuals`, with and without the GPU; the page always composites opaque white. So the original see-through-glass idea is not available here.
+There is no separate transparent full-screen mode, and there cannot be one here: **Chrome on this machine will not produce a per-pixel transparent window** — tested with and without `--enable-transparent-visuals`, with and without the GPU; the page always composites opaque white. The mirror panel is the answer to that, not a consolation prize: because it stays mapped it is never de-composited, so it holds full frame rate, and it leaves your actual screen visible to point at.
 
-```
-./launch-strip.sh    # the mirror look, in a small sticky panel — recommended
-./launch-hud.sh      # the full-screen board, floating over everything
-```
-
-`launch-strip.sh` opens `stage.html?mode=mirror&hud=1` in a small (460x330 by default, `JARVIS_STRIP_W/H/GAP` to change) borderless window, floated and stickied to every workspace and parked bottom-right. You get the mirror view you already know — yourself, your hands, the ring — it does not cover your work, and because it stays mapped it never stops being composited, so it holds full frame rate. This is the one to use if you want to work in your real apps and control them by hand.
-
-`launch-hud.sh` opens the same board full-screen: `stage.html?mode=overlay&hud=1` in a click-through borderless Chrome window, floated (never i3-fullscreened) and stickied across every workspace. It covers your screen, but since windows behind it stay mapped, you can stage them as live desk cards **on** the glass — which is the point of the full-screen mode rather than a drawback.
-
-Either way the server starts first if it isn't already up.
-
-**One board at a time.** Both launchers refuse if a jarvis Chrome is already running, and tell you which pid to kill. This is not fussiness: Chrome flags only land on a genuinely new process, so a second window opened against the same profile is handed to the running browser and keeps *its* flags. `--ignore-gpu-blocklist` disappears, MediaPipe falls back to the CPU delegate, and every model runs 4-6x slower — measured 8-10 fps against 31 fps, on the same machine with the same board. `JARVIS_FORCE=1` overrides it if you insist.
+**One board at a time.** The launcher refuses if a jarvis Chrome is already running, and tells you which pid to kill. This is not fussiness: Chrome flags only land on a genuinely new process, so a second window opened against the same profile is handed to the running browser and keeps *its* flags. `--ignore-gpu-blocklist` disappears, MediaPipe falls back to the CPU delegate, and every model runs 4-6x slower — measured 8-10 fps against 31 fps, on the same machine with the same board. `JARVIS_FORCE=1` overrides it if you insist.
 
 **Enable it** in `jarvis.json`:
 

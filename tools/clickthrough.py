@@ -4,7 +4,8 @@
 """Sets a window's INPUT shape to an empty region via the X11 Shape
 extension, so every click, scroll and pointer event passes straight
 through it to whatever renders underneath — while the window itself
-keeps compositing on top exactly as before. Used by launch-hud.sh to
+keeps compositing on top exactly as before. Was used by the old
+launch-hud.sh to
 make the HUD's overlay window click-through: it must never steal a
 click, scroll, or hover from the real desktop it floats above.
 

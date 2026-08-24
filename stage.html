@@ -644,7 +644,7 @@ function hudPointerTick(now) {
   const rateHz = (PTR_CFG && PTR_CFG.rateHz) || 90;
   if (now - HUD.lastSend.t < 1000 / rateHz) return;
   // window px -> screen px: the overlay is sized to cover the whole
-  // screen (launch-hud.sh floats/fullscreens it with i3), so this is
+  // screen (launch.sh floats + sticks the panel with i3), so this is
   // 1:1 plus whatever chrome the browser window itself adds — computed,
   // not assumed, so a decorated window still maps correctly.
   const offX = (window.screenX || 0) + (window.outerWidth - window.innerWidth) / 2;
@@ -3460,6 +3460,7 @@ addEventListener("keydown", e => {
   if (HUD_MODE && (e.key === "a" || e.key === "A")) hudToggleArmed();
   // live respawn: re-read the notes AND props trees from disk before
   // redrawing — a freshly dropped file appears on a plain R press
+  if (e.key === "f" || e.key === "F") panelToggle();   // Task 24: grow/shrink the panel
   if (e.key === "r" || e.key === "R") loadTree().then(() => spawnStage());
   if (e.key === "d" || e.key === "D") dbg.style.display = dbg.style.display === "block" ? "none" : "block";
   if (e.key === "c" || e.key === "C") cycleCam();
@@ -4420,6 +4421,22 @@ function approveGuest(faceId, how) {
   toast(`guest allowed (${how}) — they must stay close to you`, 2500);
 }
 function revokeGuest(faceId) { delete LOCK.approvals[faceId]; toast("guest revoked", 1500); }
+
+// F — GROW THE PANEL AND PUT IT BACK (Task 24). The board is one small
+// sticky mirror panel; this is how it gets big for a moment (reading on
+// the glass, working with live desk cards) without becoming a second way
+// to launch it. The server does the resize because a page cannot move its
+// own i3 window, and it resizes the board window the SERVER identified —
+// nothing here names a target. It is a floating resize, never i3
+// fullscreen, so the windows behind it stay mapped and keep streaming.
+async function panelToggle() {
+  try {
+    const r = await fetch("/desks/cmd", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: "panel", mode: "toggle" }) });
+    if (!r.ok) toast("could not resize the panel", 1600);
+  } catch (e) { toast("could not resize the panel", 1600); }
+}
 
 // THE GUEST WHO KEEPS BEING RE-APPROVED (Task 23). A face keeps its id
 // only while it has been seen inside face.graceMs; miss that window and
