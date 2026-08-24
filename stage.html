@@ -268,7 +268,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      treatment stays on the .panel FRAME only, never on the content
      (no relief, no scan sweep — this is plain img markup, not a
      three.js scene). */
-  .panel.desk { width:640px; height:460px; }
+  /* Task 27: 640x460 was too small to read a real window in, and the
+     source was being downscaled to 640x360 on top of that. Full-res
+     capture plus a bigger card makes text legible; stretch it further by
+     hand when you need to. */
+  .panel.desk { width:1000px; height:620px; }
   .panel.desk .body { display:flex; align-items:center; justify-content:center;
                       padding:0; overflow:hidden; background:#04100e; position:relative; }
   .panel.desk .body img { display:block; max-width:100%; max-height:100%; }
@@ -5937,7 +5941,8 @@ function pushState(now) {
     // in: enough to attribute a sample, and it changes every reload so
     // it identifies nothing but the tab.
     page: { id: PAGE_ID, mode: MODE, hud: HUD_MODE, role: Q.get("role") || "tracker" },
-    hud: { on: HUD_MODE, armed: HUD.armed, hz: (PTR_CFG && PTR_CFG.rateHz) || 90 },
+    hud: { on: HUD_MODE, armed: HUD.armed, hz: (PTR_CFG && PTR_CFG.rateHz) || 90,
+           mirror: MIRROR_STEPS[MIRROR_I], overDesk: HUD.overDesk || null },
     faces: FACES ? FACES.list().filter(f => f.seenNow).map(f => ({
       id: f.id, role: (LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "unknown",
       x: +f.cx.toFixed(3), y: +f.cy.toFixed(3), w: +f.w.toFixed(3), h: +f.h.toFixed(3),
