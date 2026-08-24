@@ -75,6 +75,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
          transform:scaleX(-1); }
   body.overlay #cam, body.keybg #cam {
          width:2px; height:2px; opacity:0.01; pointer-events:none; }
+  /* THE GHOST MIRROR (the user, after the first HUD test: "i liked how the
+     mirror screen felt and i want to control in that itself"). The overlay
+     rule above shrinks the camera to a 2px stub because a transparent OBS
+     source must not paint it. In HUD mode we want it BACK — full-bleed but
+     translucent, so the desktop reads through it and the board still feels
+     like the mirror it was. M cycles the opacity; 0 = pure glass-on-desktop. */
+  body.hud.overlay #cam {
+         position:fixed; inset:0; width:100vw; height:100vh; object-fit:cover;
+         transform:scaleX(-1);                       /* selfie, like the board */
+         opacity:var(--mirror, 0.35); pointer-events:none; z-index:0;
+         transition:opacity .25s ease; }
+  body.hud.overlay #behind { z-index:1; }
   /* THE GLASS ERA (2026-08-13, Jared's redesign): clean CLEAR glass —
      low-alpha smoked fills you genuinely see through, one luminous
      edge, a specular kiss on top. No wireframe chrome; restraint IS
@@ -671,6 +683,30 @@ if (MODE === "overlay") {
 // showing the desktop through a transparent board.
 const HUD_MODE = MODE === "overlay" && Q.get("hud") === "1";
 if (HUD_MODE) document.body.classList.add("hud");
+// THE MIRROR DIAL: how much of the camera shows behind the glass in HUD
+// mode. Starts at tuning hud.mirror; M cycles it live so the feel can be
+// dialled in without a reload, and the choice sticks for next launch.
+const MIRROR_STEPS = [0, 0.2, 0.35, 0.6, 1];
+let MIRROR_I = (() => {
+  const saved = parseFloat(localStorage.getItem("jarvis-mirror"));
+  const want = Number.isFinite(saved) ? saved : ((TUNE.hud && TUNE.hud.mirror) ?? 0.35);
+  let best = 0, bd = 9;
+  MIRROR_STEPS.forEach((v, i) => { const d = Math.abs(v - want); if (d < bd) { bd = d; best = i; } });
+  return best;
+})();
+function applyMirror(announce) {
+  const v = MIRROR_STEPS[MIRROR_I];
+  document.documentElement.style.setProperty("--mirror", v);
+  try { localStorage.setItem("jarvis-mirror", String(v)); } catch (_) {}
+  if (announce) toast(v === 0 ? "mirror off — glass on your desktop"
+                              : `mirror ${Math.round(v * 100)}%`, 1200);
+}
+if (HUD_MODE) {
+  applyMirror(false);
+  addEventListener("keydown", e => {
+    if (e.key === "m" || e.key === "M") { MIRROR_I = (MIRROR_I + 1) % MIRROR_STEPS.length; applyMirror(true); }
+  });
+}
 if (MODE === "key") {
   const KEYS = { magenta: "#ff00ff", green: "#00ff00", blue: "#0000ff" };
   const want = (Q.get("key") || "magenta").toLowerCase();

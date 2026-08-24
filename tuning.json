@@ -136,5 +136,9 @@
     "minFlick": 120,
     "stop": 20,
     "pdfAhead": 1
+  },
+  "hud": {
+    "_": "THE HUD (glass over the real desktop). mirror = how much of the camera self-view shows behind the glass, 0..1 \u2014 0 is pure see-through, 1 is the old full mirror. M cycles it live in HUD mode and the choice is remembered per browser.",
+    "mirror": 0.35
   }
 }
