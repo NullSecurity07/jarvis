@@ -337,3 +337,45 @@ test("needsGeomBackfill: true — owner has no geom, face is frontal, confident,
 test("needsGeomBackfill: a malformed owner.geom (wrong length) is not \"already has geometry\" — backfill still proceeds", () => {
   assert.equal(needsGeomBackfill({ vecs: [], geom: [1, 2, 3] }, geomFace(), T), true);
 });
+
+// ---- GUESTS, ROUND 2 (Task 23): the hysteresis must NOT loosen entry.
+// The user's rule is that a guest has to be very close to be let in at
+// all, and loses access when they drift. The bug being fixed is narrower:
+// an ALREADY-APPROVED guest flickering guest/guest-away (and so losing
+// their hands) on every small shift. So there are two radii, and the
+// entry one is untouched.
+test("guest hysteresis: an approved guest survives a small drift that a newcomer could not enter at", () => {
+  // 1.7 face widths from the owner: outside closeK (1.5), inside guestKeepK (1.9)
+  const mid = { cx: 0.5 + 1.7 * 0.2, cy: 0.4 };
+  const approvals = { 2: { approvedT: 1000 } };
+  const kept = run(now => base({ now, approvals,
+    faces: [owner({ blinkT: now, moveT: now }), other({ ...mid })],
+    hands: [hand({ id: 11, wx: mid.cx + 0.02, wy: 0.6, span: 0.1 })] }), 3);
+  assert.equal(kept.faceRole[2], "guest");      // stays in
+  assert.equal(kept.handRole[11], "guest");     // and keeps their hands
+  assert.deepEqual(kept.revoke, []);
+
+  // the same position, but NOT already approved: still too far to be let
+  // in. If this ever reads "candidate", the hysteresis has leaked into
+  // the entry gate and anyone standing nearby can be waved through.
+  const newcomer = run(now => base({ now,
+    faces: [owner({ blinkT: now, moveT: now }), other({ ...mid })] }), 3);
+  assert.equal(newcomer.faceRole[2], "stranger");
+  assert.deepEqual(newcomer.guestCandidates, []);
+});
+
+test("guest closeness scales with both faces, not the owner's alone", () => {
+  // A guest leaning in has a BIGGER face than the owner. Measured purely
+  // in owner-face-widths, the same physical gap reads as further away the
+  // smaller the owner's face happens to be.
+  const approvals = { 2: { approvedT: 1000 } };
+  const at = (dx, w) => ({ cx: 0.5 + dx, cy: 0.4, w });
+  // 1.8x the OWNER's width away, with a guest face 1.6x the owner's size
+  const big = run(now => base({ now, approvals,
+    faces: [owner({ blinkT: now, moveT: now }), other({ ...at(1.8 * 0.2, 0.32) })] }), 3);
+  assert.equal(big.faceRole[2], "guest");   // mean width 0.26 -> keep radius 0.494 > 0.36
+  // the same gap with a guest face SMALLER than the owner's stays out
+  const small = run(now => base({ now, approvals,
+    faces: [owner({ blinkT: now, moveT: now }), other({ ...at(2.4 * 0.2, 0.08) })] }), 3);
+  assert.equal(small.faceRole[2], "guest-away");
+});

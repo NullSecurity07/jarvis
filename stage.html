@@ -464,7 +464,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 // are live. window.TUNE exposes it for the console.
 const TUNE_DEFAULTS = {
   detector: { detect: 0.65, presence: 0.45, track: 0.45 },
-  hands: { graceMs: 200, gate: 0.35,
+  hands: { graceMs: 200, gate: 0.35, maxHands: 4,
            euro: { minCutoff: 1.5, beta: 8, dCutoff: 1, zMinCutoff: 1.0 },
            cursorLerp: 0.45 },
   pinch: { contrast: 0.18, backFloor: 1.30, profileAspect: 2.0, profileT: 0.95,
@@ -479,10 +479,11 @@ const TUNE_DEFAULTS = {
            darkMs: 3000, brightMs: 5000 },
   tape: { seconds: 180, raw: true },
   owner: { enabled: true, matchDist: 0.5, graceMs: 1500, livenessMs: 8000,
-           closeK: 1.5, guestTimeoutMs: 10000, handReach: 3.0,
+           closeK: 1.5, guestKeepK: 1.9, guestMatchDist: 0.5,
+           guestTimeoutMs: 10000, handReach: 3.0,
            spanMin: 0.35, spanMax: 2.5, thumbsUpMs: 1000, enrollMs: 3000,
            geomTol: 0.18, driftMax: 0.35, driftEveryMs: 600000, driftCap: 16, propTol: 0.25 },
-  face: { everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4,
+  face: { everyNthFrame: 1, idEveryMs: 1500, graceMs: 1200, eyeOpenMin: 0.4,
           blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25 },
   pose: { enabled: true, everyNthFrame: 2, wristTol: 0.12, visMin: 0.5 },
   hands2: { enabled: true, sideW: 1.6, sideH: 2.4, conf: 0.5, dedupe: 0.08,
@@ -4080,7 +4081,18 @@ function makeLandmarker() {
     baseOptions: { modelAssetPath:
       "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
       delegate: "GPU" },
-    numHands: 2, runningMode: "VIDEO",
+    // TWO PEOPLE NEED MORE THAN TWO HANDS (Task 23). numHands is a hard
+    // cap on hands detected in the WHOLE frame, not per person: with a
+    // guest sitting next to the owner, the guest's hands compete for the
+    // same two slots and the owner simply loses one. The owner lock then
+    // correctly refuses to act on the guest's hand, so the visible effect
+    // is "my hand stopped working when someone sat next to me" — part of
+    // the user's "the guest system allowance doesnt work that well".
+    // Tunable because it is not free: every extra slot is more landmark
+    // work per frame, and more chances for the phantom-hand filter below
+    // to have to reject background clutter.
+    numHands: Math.max(1, Math.min(6, (TUNE.hands && TUNE.hands.maxHands) || 4)),
+    runningMode: "VIDEO",
     // phantom-hand filter (a real-room catch: debug showed a hand with
     // none in frame — a busy background is full of hand-shaped clutter
     // and the 0.5 defaults hallucinate there; a ghost hand can grab items
@@ -4395,10 +4407,57 @@ function applyVerdict(V, now) {
 }
 function approveGuest(faceId, how) {
   const ch = LOCK.candidates[faceId]; if (ch) ch.dataset.hot = "0";   // Task 14 #1: no stale glow after approval
-  LOCK.approvals[faceId] = { approvedT: performance.now(), how };
+  // Task 23: remember the face's DESCRIPTOR alongside the approval. A
+  // tracking id is not a person — it is dropped the moment the face model
+  // misses a couple of frames (see guestRelink), and approvals keyed to
+  // it alone quietly expired mid-session. The descriptor is what makes
+  // "this person is allowed" survive the id churn.
+  const f = FACES ? FACES.list().find(x => String(x.id) === String(faceId)) : null;
+  LOCK.approvals[faceId] = { approvedT: performance.now(), how,
+                             vec: (f && f.lastVec) || null };
   toast(`guest allowed (${how}) — they must stay close to you`, 2500);
 }
 function revokeGuest(faceId) { delete LOCK.approvals[faceId]; toast("guest revoked", 1500); }
+
+// THE GUEST WHO KEEPS BEING RE-APPROVED (Task 23). A face keeps its id
+// only while it has been seen inside face.graceMs; miss that window and
+// the next detection mints a brand new id. At a poor frame rate with two
+// people in view that happened constantly, and since approvals were keyed
+// by id, an approved guest silently became a "stranger" again — the user:
+// "the guest system allowance doesnt work that well".
+//
+// So an approval now carries the descriptor of the face it was granted
+// to, and this runs before every decide(): if an approved id is no longer
+// in the face list, but some UNAPPROVED face matches its descriptor, the
+// approval moves to that face's new id. Identity does the re-linking, not
+// position — matching on "a face near where they were" would hand one
+// person's approval to whoever stood in their place, which is exactly the
+// thing the owner lock exists to prevent. No descriptor stored or no
+// match found means no re-link: it expires the old way.
+function vecDist(a, b) {
+  if (!a || !b || a.length !== b.length) return Infinity;
+  let s = 0;
+  for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; s += d * d; }
+  return Math.sqrt(s);
+}
+function guestRelink(faces) {
+  const ids = new Set(faces.map(f => String(f.id)));
+  const tol = (TUNE.owner && TUNE.owner.guestMatchDist) ?? 0.5;
+  for (const [id, ap] of Object.entries(LOCK.approvals)) {
+    if (ids.has(String(id)) || !ap || !ap.vec) continue;
+    let best = null, bestD = tol;
+    for (const f of faces) {
+      if (LOCK.approvals[f.id] || !f.lastVec) continue;   // never steal an existing approval
+      const d = vecDist(ap.vec, f.lastVec);
+      if (d < bestD) { bestD = d; best = f; }
+    }
+    if (best) {
+      delete LOCK.approvals[id];
+      LOCK.approvals[best.id] = { ...ap, relinkedT: performance.now() };
+      if (LOCK.state && LOCK.state.away) delete LOCK.state.away[id];
+    }
+  }
+}
 // THUMBS-UP: thumb tip well above the wrist and above the index knuckle,
 // the four fingers folded (arch ratio < 1.15), read like every other gate
 function isThumbsUp(lms, span) {
@@ -4666,9 +4725,11 @@ async function boot() {
         id: ids[mi], wx: lms[0].x, wy: lms[0].y,
         span: Math.hypot(lms[0].x - lms[9].x, lms[0].y - lms[9].y) }));
       const posesIn = POSE ? POSE.list() : [];
+      const facesIn = FACES ? FACES.list() : [];
+      guestRelink(facesIn);                 // Task 23: before approvals are read
       const V = decide({ now, enabled: LOCK.enabled, enrolled: LOCK.enrolled,
                          identityReady: !!(IDENT && IDENT.isReady()), lockOverride: LOCK.override,
-                         faces: FACES ? FACES.list() : [], hands: handsIn, approvals: LOCK.approvals,
+                         faces: facesIn, hands: handsIn, approvals: LOCK.approvals,
                          owner: LOCK.owner, poses: posesIn },
                        TUNE, LOCK.state);
       applyVerdict(V, now);

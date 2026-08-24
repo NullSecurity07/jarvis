@@ -7,7 +7,7 @@
     "track": 0.45
   },
   "hands": {
-    "_": "THE HANDS: identity + grace + smoothing. graceMs = how long a vanished hand stays a ghost (no tap/fling fires). gate = max wrist travel (normalized) to re-match an id. euro = One-Euro filter (minCutoff: lower = steadier at rest; beta: higher = sharper in motion). cursorLerp = the cursor's per-frame chase toward the pinch point (1 = raw).",
+    "_": "THE HANDS: identity + grace + smoothing. graceMs = how long a vanished hand stays a ghost (no tap/fling fires). gate = max wrist travel (normalized) to re-match an id. euro = One-Euro filter (minCutoff: lower = steadier at rest; beta: higher = sharper in motion). cursorLerp = the cursor's per-frame chase toward the pinch point (1 = raw). maxHands (Task 23): a WHOLE-FRAME cap, not per person \u2014 at 2 a guest sitting beside the owner competed for the same two slots and the owner lost a hand. 4 covers two people; each extra slot costs landmark work per frame.",
     "graceMs": 200,
     "gate": 0.35,
     "euro": {
@@ -16,7 +16,8 @@
       "dCutoff": 1,
       "zMinCutoff": 1.0
     },
-    "cursorLerp": 0.45
+    "cursorLerp": 0.45,
+    "maxHands": 4
   },
   "pinch": {
     "_": "THE PINCH. Three admitting signatures (any one): CONTRAST (frontal OK-sign: backMean-f8 > contrast && backMean > backFloor), PROFILE (aspect < profileAspect && tRel > profileT), CURLED (this hand's natural pinch: tRel > curledT && aspect > curledAspect; clinic 2026-08-23: pinch t .64-.70/a 2.80-3.41 vs fist t .12-.52/a 2.06-2.63). Touch = 2D gap ratio under the ceiling (gapFrontal / gapRotated for aspect < profileAspect) OR THE WORLD LANE: metric thumb-tip/index-tip distance from MediaPipe's world landmarks under worldTouchCm centimetres (orientation-proof; 0 disables). Release: ratio >= relSlow, or relFast when the hand moves faster than fastSpd px/s (two frames running). emaBar = the charged-EMA admit bar. sanityAspect = palm aspect above which the hand is a hallucination.",
@@ -71,7 +72,7 @@
     "raw": true
   },
   "owner": {
-    "_": "THE OWNER LOCK. enabled=false turns the whole thing off (?lock=0 on the URL does the same for one launch). matchDist = face-api descriptor distance under which a face IS the owner (same person typically < 0.5; fit it with the D overlay's score). graceMs = how long the board stays open after the owner's face drops. livenessMs = a blink or head move must be this recent (anti-photo). 30s, not 8s: a person concentrating on a screen blinks every 15-20s, and 8s locked the user mid-read. A photo still never blinks and never micro-moves, so it locks after 30s. closeK = a second face counts as 'close' (guest candidate) within closeK x the owner's face width, centre to centre, enforced continuously. guestTimeoutMs = revoke an approved guest this long after they drift away / leave. handReach / spanMin / spanMax = hand-to-face assignment: wrist within handReach face widths of the face, hand span between spanMin..spanMax face widths. thumbsUpMs = hold a thumbs-up this long to approve. enrollMs = the first-boot auto-enroll window (one face, alone, attentive). geomTol = THE GEOMETRY GATE (Task 11): max mean relative difference between a face's iris-normalised bone-ratio vector and the enrolled one before it REJECTS an otherwise-matching descriptor (beard-proof; 0 disables the gate). driftMax = THE TEMPLATE DRIFT: a face this confidently-you (descriptor score under driftMax) is eligible to update the owner's stored descriptors. driftEveryMs = minimum gap between drift writes (0 disables drift). driftCap = the owner's vecs array never grows past this many descriptors. propTol = POSE-LINKED HANDS: how close a body's shoulderW/headW proportion must be to the owner's enrolled one to win a tied hand claim (tie-breaker only, never a rejection).",
+    "_": "THE OWNER LOCK. enabled=false turns the whole thing off (?lock=0 on the URL does the same for one launch). matchDist = face-api descriptor distance under which a face IS the owner (same person typically < 0.5; fit it with the D overlay's score). graceMs = how long the board stays open after the owner's face drops. livenessMs = a blink or head move must be this recent (anti-photo). 30s, not 8s: a person concentrating on a screen blinks every 15-20s, and 8s locked the user mid-read. A photo still never blinks and never micro-moves, so it locks after 30s. closeK = a second face counts as 'close' (guest candidate) within closeK x the owner's face width, centre to centre, enforced continuously. guestTimeoutMs = revoke an approved guest this long after they drift away / leave. handReach / spanMin / spanMax = hand-to-face assignment: wrist within handReach face widths of the face, hand span between spanMin..spanMax face widths. thumbsUpMs = hold a thumbs-up this long to approve. enrollMs = the first-boot auto-enroll window (one face, alone, attentive). geomTol = THE GEOMETRY GATE (Task 11): max mean relative difference between a face's iris-normalised bone-ratio vector and the enrolled one before it REJECTS an otherwise-matching descriptor (beard-proof; 0 disables the gate). driftMax = THE TEMPLATE DRIFT: a face this confidently-you (descriptor score under driftMax) is eligible to update the owner's stored descriptors. driftEveryMs = minimum gap between drift writes (0 disables drift). driftCap = the owner's vecs array never grows past this many descriptors. propTol = POSE-LINKED HANDS: how close a body's shoulderW/headW proportion must be to the owner's enrolled one to win a tied hand claim (tie-breaker only, never a rejection). GUESTS, ROUND 2 (Task 23): closeK is the tight radius to BECOME a guest candidate; guestKeepK is the wider radius an ALREADY-APPROVED guest is judged against, so they don't flicker guest/guest-away (and lose their hands) every time they shift in their seat. Both scale with the mean of the two face widths, not the owner's alone. guestMatchDist is the descriptor distance within which an approval follows a person across a face-id change (same units as matchDist).",
     "enabled": true,
     "matchDist": 0.5,
     "graceMs": 1500,
@@ -87,13 +88,15 @@
     "driftMax": 0.35,
     "driftEveryMs": 600000,
     "driftCap": 16,
-    "propTol": 0.25
+    "propTol": 0.25,
+    "guestKeepK": 1.9,
+    "guestMatchDist": 0.5
   },
   "face": {
-    "_": "THE FACES (MediaPipe FaceLandmarker). everyNthFrame = run the face model every Nth video frame (the stage raises it to 2 by itself when hands+face inference exceeds the frame budget). idEveryMs = re-score each face's identity this often. graceMs = a vanished face stays listed this long. eyeOpenMin = eyes count as open above this (1 - max eyeBlink blendshape). blinkClose = eyes count as shut below this (a blink = shut then open within 600ms). 0.45, not 0.3: a fast blink only dips the eye-open signal partway, and at a low camera fps a full closure can fall between frames entirely. moveDeg = head pose change that counts as motion. attYaw/attPitch = the attention cone in degrees.",
+    "_": "THE FACES (MediaPipe FaceLandmarker). everyNthFrame = run the face model every Nth video frame (the stage raises it to 2 by itself when hands+face inference exceeds the frame budget). idEveryMs = re-score each face's identity this often. graceMs = a vanished face stays listed this long. eyeOpenMin = eyes count as open above this (1 - max eyeBlink blendshape). blinkClose = eyes count as shut below this (a blink = shut then open within 600ms). 0.45, not 0.3: a fast blink only dips the eye-open signal partway, and at a low camera fps a full closure can fall between frames entirely. moveDeg = head pose change that counts as motion. attYaw/attPitch = the attention cone in degrees. graceMs raised 300 -> 1200 (Task 23): a face keeps its identity only while seen inside this window, and a guest approval hangs off that identity. At ~11 fps with faceEvery=2 the model runs every ~180ms, so ONE missed detection minted a new face id and silently dropped the guest's approval.",
     "everyNthFrame": 1,
     "idEveryMs": 1500,
-    "graceMs": 300,
+    "graceMs": 1200,
     "eyeOpenMin": 0.4,
     "blinkClose": 0.45,
     "moveDeg": 4,

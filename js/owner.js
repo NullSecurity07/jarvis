@@ -11,12 +11,22 @@
 
 export const TUNE_OWNER_DEFAULTS = {
   enabled: true, matchDist: 0.5, graceMs: 1500, livenessMs: 8000,
-  closeK: 1.5, guestTimeoutMs: 10000, handReach: 3.0,
+  closeK: 1.5, guestKeepK: 1.9, guestTimeoutMs: 10000, handReach: 3.0,
   spanMin: 0.35, spanMax: 2.5, thumbsUpMs: 1000, enrollMs: 3000,
   geomTol: 0.18, driftMax: 0.35, driftEveryMs: 600000, driftCap: 16, propTol: 0.25,
 };
 export const TUNE_FACE_DEFAULTS = {
-  everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4,
+  // graceMs 300 -> 1200: a face keeps its identity only while it has been
+  // seen within this window, and EVERYTHING about a guest hangs off that
+  // identity. At 11 fps with faceEvery=2 the face model only runs about
+  // every 180ms, so ONE missed detection blew past 300ms, minted a fresh
+  // face id, and silently dropped that person's guest approval — they
+  // reverted to "stranger" mid-session and had to be approved again.
+  // 1200ms tolerates a handful of missed detections at a bad frame rate
+  // while still expiring someone who actually left. (The identity re-link
+  // in stage.html is the belt to this braces: an approval now follows the
+  // face's descriptor even across an id change.)
+  everyNthFrame: 1, idEveryMs: 1500, graceMs: 1200, eyeOpenMin: 0.4,
   blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25,
 };
 export const TUNE_POSE_DEFAULTS = { enabled: false, everyNthFrame: 2, wristTol: 0.12, visMin: 0.5 };
@@ -161,9 +171,23 @@ export function decide(input, tune, prev = {}) {
   const others = faces.filter(f => f.id !== O.id);
   const guestCandidates = [], revoke = [];
   for (const f of others) {
-    const close = Math.hypot(f.cx - O.cx, f.cy - O.cy) <= T.closeK * O.w;
+    // TWO RADII, ON PURPOSE (hysteresis). Getting IN as a guest needs the
+    // tight closeK the user asked for ("almost between my legs"). STAYING
+    // in is judged against the wider guestKeepK, because a single gate
+    // makes an approved guest flicker guest/guest-away every time they
+    // shift in their seat — and each flicker instantly blocks their hands
+    // and starts a revoke timer. Drifting genuinely away still revokes,
+    // it just takes leaving the wider radius to start the clock.
+    // The radius scales with BOTH faces' widths, not just the owner's: if
+    // the guest is nearer the camera than the owner their face is bigger,
+    // and measuring purely in owner-face-widths made the same physical
+    // gap read as further away.
+    const scale = Math.max(O.w, (O.w + (f.w || O.w)) / 2);
+    const d = Math.hypot(f.cx - O.cx, f.cy - O.cy);
+    const close = d <= T.closeK * scale;
     if (approvals[f.id]) {
-      if (close) { faceRole[f.id] = "guest"; delete st.away[f.id]; }
+      const stillClose = d <= Math.max(T.closeK, T.guestKeepK) * scale;
+      if (stillClose) { faceRole[f.id] = "guest"; delete st.away[f.id]; }
       else {
         faceRole[f.id] = "guest-away";
         if (!st.away[f.id]) st.away[f.id] = now;
