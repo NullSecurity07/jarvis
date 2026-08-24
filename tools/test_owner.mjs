@@ -187,9 +187,9 @@ test("no enrolled geometry on file: descriptor alone decides, gate is a no-op", 
 // body maps to a face by nose proximity, and that face's role decides the
 // hand's role — a skeleton fact, ahead of the face-distance fallback.
 const pose = (o = {}) => ({ id: 20, nose: { x: 0.5, y: 0.4 },
-  wristL: { x: 0.45, y: 0.7, vis: 0.9 }, wristR: { x: 0.55, y: 0.7, vis: 0.9 },
+  wristL: { x: 0.45, y: 0.7, vis: 0.9, ok: true }, wristR: { x: 0.55, y: 0.7, vis: 0.9, ok: true },
   shoulderL: { x: 0.4, y: 0.45 }, shoulderR: { x: 0.6, y: 0.45 },
-  shoulderW: 0.2, headW: 0.12, torso: 0.3, prop: 1.6, ...o });
+  shoulderW: 0.2, headW: 0.12, torso: 0.3, prop: 1.6, frame: "full", scaleSrc: "shoulder", ...o });
 
 test("pose-linked: a hand near the owner's wrist is the owner's even when a stranger's face is nearer to it", () => {
   // the hand sits right next to the stranger (id 2, cx 0.9) — the old
@@ -199,18 +199,43 @@ test("pose-linked: a hand near the owner's wrist is the owner's even when a stra
   const v = run(now => base({ now,
     faces: [owner({ blinkT: now, moveT: now }), other()],
     hands: [hand({ id: 10, wx: 0.85, wy: 0.65 })],
-    poses: [pose({ wristR: { x: 0.85, y: 0.65, vis: 0.9 } })] }), 3);
+    poses: [pose({ wristR: { x: 0.85, y: 0.65, vis: 0.9, ok: true } })] }), 3);
   assert.equal(v.locked, false);
   assert.equal(v.faceRole[2], "stranger");           // the face rule alone would reject this hand
   assert.equal(v.handRole[10], "owner");              // the pose corrects it
+});
+
+test("pose-linked: usable wrists but null hips (chest-up framing) still link hands", () => {
+  // js/pose.js nulls torso/prop when hips aren't usable (hips gone past
+  // the frame edge, chest-up) — the wrist itself is still usable, and
+  // that alone is enough to claim the hand.
+  const v = run(now => base({ now,
+    faces: [owner({ blinkT: now, moveT: now }), other()],
+    hands: [hand({ id: 10, wx: 0.85, wy: 0.65 })],
+    poses: [pose({ torso: null, prop: null, frame: "chest", scaleSrc: "shoulder",
+                    wristR: { x: 0.85, y: 0.65, vis: 0.9, ok: true } })] }), 3);
+  assert.equal(v.faceRole[2], "stranger");           // the face rule alone would reject this hand
+  assert.equal(v.handRole[10], "owner");              // the pose still links it via the wrist alone
+});
+
+test("pose-linked: unusable wrists (ok:false) fall back to the face-distance rule", () => {
+  // a body is tracked (e.g. an off-frame/low-confidence wrist read) but
+  // neither wrist clears the visibility+in-frame bar — that body cannot
+  // claim ANY hand this frame. Worst case: identical to no pose at all.
+  const v = run(now => base({ now,
+    faces: [owner({ blinkT: now, moveT: now }), other()],
+    hands: [hand({ id: 10, wx: 0.52, wy: 0.65 }), hand({ id: 11, wx: 0.9, wy: 0.7 })],
+    poses: [pose({ wristL: { x: 0.52, y: 0.65, vis: 0.4, ok: false },
+                    wristR: { x: 0.9, y: 0.7, vis: 0.3, ok: false } })] }), 3);
+  assert.equal(v.handRole[10], "owner"); assert.equal(v.handRole[11], "none");  // same as the plain face-distance case
 });
 
 test("pose-linked: a hand no pose claims falls back to today's face-distance rule", () => {
   const v = run(now => base({ now,
     faces: [owner({ blinkT: now, moveT: now }), other()],
     hands: [hand({ id: 10, wx: 0.52, wy: 0.65 }), hand({ id: 11, wx: 0.9, wy: 0.7 })],
-    poses: [pose({ nose: { x: 0.5, y: 0.99 }, wristL: { x: 0.01, y: 0.01, vis: 0.9 },
-                    wristR: { x: 0.02, y: 0.02, vis: 0.9 } })] }), 3);   // this pose claims nothing
+    poses: [pose({ nose: { x: 0.5, y: 0.99 }, wristL: { x: 0.01, y: 0.01, vis: 0.9, ok: true },
+                    wristR: { x: 0.02, y: 0.02, vis: 0.9, ok: true } })] }), 3);   // this pose claims nothing
   assert.equal(v.handRole[10], "owner"); assert.equal(v.handRole[11], "none");
 });
 
@@ -233,11 +258,31 @@ test("pose-linked: prop is a tie-breaker only, when two bodies both claim a hand
     faces: [owner({ blinkT: now, moveT: now }), other()],
     hands: [hand({ id: 10, wx: 0.85, wy: 0.65 })],
     poses: [
-      pose({ id: 21, nose: { x: 0.9, y: 0.4 }, prop: 2.4, wristR: { x: 0.85, y: 0.65, vis: 0.9 } }),
-      pose({ id: 22, nose: { x: 0.5, y: 0.4 }, prop: 1.62, wristR: { x: 0.85, y: 0.65, vis: 0.9 } }),
+      pose({ id: 21, nose: { x: 0.9, y: 0.4 }, prop: 2.4, wristR: { x: 0.85, y: 0.65, vis: 0.9, ok: true } }),
+      pose({ id: 22, nose: { x: 0.5, y: 0.4 }, prop: 1.62, wristR: { x: 0.85, y: 0.65, vis: 0.9, ok: true } }),
     ] }), 3);
   assert.equal(v.faceRole[2], "stranger");   // the face rule alone would reject this hand
   assert.equal(v.handRole[10], "owner");
+});
+
+test("pose-linked: one claim with prop:null disqualifies the whole tie-break (falls back to nearest wrist)", () => {
+  // Same shape as the tie-break test above, but body A's prop is null
+  // (a framing that couldn't compute one, e.g. shoulder-up with ears
+  // occluded). If the tie-break ran anyway it would still pick B (whose
+  // prop matches) — this proves it's skipped instead: nearest-wrist wins,
+  // which is A (wrist exactly on the hand), so the hand goes to the
+  // stranger's body and is rejected. Degrading only ever costs a hand the
+  // owner would have kept — it never invents an owner hand from nothing.
+  const v = run(now => base({ now,
+    owner: { prop: 1.6 },
+    faces: [owner({ blinkT: now, moveT: now }), other()],
+    hands: [hand({ id: 10, wx: 0.85, wy: 0.65 })],
+    poses: [
+      pose({ id: 21, nose: { x: 0.9, y: 0.4 }, prop: null, wristR: { x: 0.85, y: 0.65, vis: 0.9, ok: true } }),
+      pose({ id: 22, nose: { x: 0.5, y: 0.4 }, prop: 1.62, wristR: { x: 0.851, y: 0.651, vis: 0.9, ok: true } }),
+    ] }), 3);
+  assert.equal(v.faceRole[2], "stranger");
+  assert.equal(v.handRole[10], "none");
 });
 
 // TEMPLATE DRIFT (Task 11 Part B): driftAppend(vecs, seeds, vec, cap) — the

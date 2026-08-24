@@ -101,10 +101,11 @@
     "attPitch": 25
   },
   "pose": {
-    "_": "POSE-LINKED HANDS (Task 11 Part C, MediaPipe PoseLandmarker). enabled=false (default) means the stage never even constructs the model \u2014 no download, no GPU cost; flip it on once the frame budget's been measured live. everyNthFrame = run the pose model every Nth video frame, starting point (the stage drops it to every 3rd itself under sustained frame-budget pressure, same hysteresis as THE FACES). wristTol = max normalized distance from a hand's wrist to a body's wrist for that body to claim the hand.",
-    "enabled": false,
+    "_": "POSE-LINKED HANDS (Task 11 Part C, MediaPipe PoseLandmarker; Task 21 turned it on). enabled=true \u2014 the stage constructs the model and runs it beside hands+face. everyNthFrame = run the pose model every Nth video frame, starting point (the stage drops it to every 3rd itself under sustained frame-budget pressure, same hysteresis as THE FACES). wristTol = max normalized distance from a hand's wrist to a body's wrist for that body to claim the hand. visMin = THE FRAMING GATE (Task 21): a landmark's visibility (and presence, if the bundle exposes it) must clear this AND the point must actually land inside the frame (small margin) before js/pose.js calls it usable (`ok`) \u2014 MediaPipe invents off-frame joints instead of omitting them, so every derived value (shoulderW/headW/torso/prop) is null unless the landmarks behind it are ok. This is what makes whole-body, half/stomach-up, chest-up and shoulder-up framings all honest instead of guessing.",
+    "enabled": true,
     "everyNthFrame": 2,
-    "wristTol": 0.12
+    "wristTol": 0.12,
+    "visMin": 0.5
   },
   "hands2": {
     "_": "THE TWO-SIDED SEARCH: when a frame comes back with fewer than 2 hands and a face is tracked, re-detect on a crop beside the face so the missing hand fills the model's input instead of a few pixels of a downscaled full frame. sideW/sideH = the region's size in face widths/heights. conf = detection confidence for the crop pass (lower than the full-frame wall is safe: the crop excludes the busy background). dedupe = wrist distance below which a rescued hand is the same as a full-frame hand. maxPerFrame = how many rescue detects one frame may run. everyNthFrame = only attempt a rescue every Nth frame (1 = every frame).",

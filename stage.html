@@ -484,7 +484,7 @@ const TUNE_DEFAULTS = {
            geomTol: 0.18, driftMax: 0.35, driftEveryMs: 600000, driftCap: 16, propTol: 0.25 },
   face: { everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4,
           blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25 },
-  pose: { enabled: false, everyNthFrame: 2, wristTol: 0.12 },
+  pose: { enabled: true, everyNthFrame: 2, wristTol: 0.12, visMin: 0.5 },
   hands2: { enabled: true, sideW: 1.6, sideH: 2.4, conf: 0.5, dedupe: 0.08,
             maxPerFrame: 1, everyNthFrame: 1 },
   image3d: { enabled: true, depth: 0.22, seg: 160, alphaCut: 0.35, rim: 0.55,
@@ -4591,7 +4591,11 @@ async function boot() {
         else { FACES._slow = 0; FACES._fast = 0; }
       }
       if (POSE) {
-        POSE.tick(_src, now);              // THE POSE, same frame — half the face rate by default
+        // THE POSE, same frame — half the face rate by default. FACES.list()
+        // rides along as the scale-of-last-resort (THE FRAMING GATE, Task
+        // 21): a body whose shoulders AND ears are both unusable can still
+        // borrow the tracked face's own width if the nose lines up with one.
+        POSE.tick(_src, now, FACES ? FACES.list() : []);
         const totP = PERF.det + (FACES ? FACES.perf.face : 0) + POSE.perf.pose;
         if (totP > 24 && POSE.perf.every === 2) { poseSlow++; if (poseSlow > 90) { POSE.setEvery(3); poseSlow = 0; } }
         else if (totP < 16 && POSE.perf.every > 2) { poseFast++; if (poseFast > 150) { POSE.setEvery(2); poseFast = 0; } }
@@ -5498,6 +5502,13 @@ async function boot() {
           ` ident ${IDENT ? IDENT.mode : "-"} face ${FACES ? FACES.perf.face.toFixed(1) : "-"}ms/${FACES ? FACES.perf.every : "-"} id ${FACES ? FACES.perf.id.toFixed(0) : "-"}ms` +
           ` pose ${POSE ? POSE.perf.pose.toFixed(1) : "-"}ms/${POSE ? POSE.perf.every : "-"} bodies ${POSE ? POSE.list().filter(b => b.seenNow).length : "-"}` +
           (RESCUE2.perf.h2.on ? `\nrescue L/R tries ${RESCUE2.perf.h2.tries} hits ${RESCUE2.perf.h2.hits} (${RESCUE2.perf.h2.ms.toFixed(1)}ms) every ${RESCUE2.every}` : "") +
+          // THE FRAMING GATE (Task 21): frame + scaleSrc + per-wrist ok,
+          // one line per tracked body — the exact fields to read while
+          // standing at whole-body/half/chest-up/shoulder-up.
+          (POSE ? POSE.list().filter(b => b.seenNow).map(b =>
+            `\n  body ${b.id} frame ${b.frame} scale ${b.scaleSrc || "-"} wristL ${b.wristL.ok ? 1 : 0} wristR ${b.wristR.ok ? 1 : 0}` +
+            ` shoulderW ${b.shoulderW != null ? b.shoulderW.toFixed(3) : "-"} headW ${b.headW != null ? b.headW.toFixed(3) : "-"}` +
+            ` torso ${b.torso != null ? b.torso.toFixed(3) : "-"} prop ${b.prop != null ? b.prop.toFixed(2) : "-"}`).join("") : "") +
           (FACES ? FACES.list().filter(f => f.seenNow).map(f =>
             `\n  face ${f.id} ${(LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "?"} score ${Number.isFinite(f.score) ? f.score.toFixed(3) : "-"}` +
             ` eye ${f.eyeOpen.toFixed(2)} blink ${((performance.now() - f.blinkT) / 1000).toFixed(1)}s yaw ${f.yaw.toFixed(0)} pitch ${f.pitch.toFixed(0)} att ${f.attention ? 1 : 0} w ${f.w.toFixed(2)}` +
@@ -5687,6 +5698,19 @@ function pushState(now) {
       att: f.attention ? 1 : 0, eye: +f.eyeOpen.toFixed(2),
       score: Number.isFinite(f.score) ? +f.score.toFixed(3) : null,
       geomOk: f.geomOk ? 1 : 0 })) : [],
+    // Task 21 (THE FRAMING GATE): one row per tracked body, on the
+    // heartbeat so the controller can verify each framing (whole body,
+    // half/stomach-up, chest-up, shoulder-up) without eyes on the screen.
+    // wristL/wristR are usable-this-frame flags, never a plausible-looking
+    // number stood in for an off-frame guess — shoulderW/headW/torso/prop
+    // are null exactly when js/pose.js couldn't trust the landmarks behind them.
+    bodies: POSE ? POSE.list().filter(b => b.seenNow).map(b => ({
+      id: b.id, frame: b.frame, scaleSrc: b.scaleSrc,
+      wristL: b.wristL.ok ? 1 : 0, wristR: b.wristR.ok ? 1 : 0,
+      shoulderW: b.shoulderW != null ? +b.shoulderW.toFixed(3) : null,
+      headW: b.headW != null ? +b.headW.toFixed(3) : null,
+      torso: b.torso != null ? +b.torso.toFixed(3) : null,
+      prop: b.prop != null ? +b.prop.toFixed(2) : null })) : [],
     perf: { det: +PERF.det.toFixed(1), face: FACES ? +FACES.perf.face.toFixed(1) : 0, faceEvery: FACES ? FACES.perf.every : 0, id: FACES ? +FACES.perf.id.toFixed(0) : 0, loop: +PERF.loop.toFixed(1),
             raf: +PERF.raf.toFixed(1), fps, log: window._mpLog || undefined,
             rearm: PERF.rearm || 0, rearmT: PERF.rearmT || 0, up: Math.round(performance.now() / 1000),

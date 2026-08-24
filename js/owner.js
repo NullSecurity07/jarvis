@@ -19,7 +19,7 @@ export const TUNE_FACE_DEFAULTS = {
   everyNthFrame: 1, idEveryMs: 1500, graceMs: 300, eyeOpenMin: 0.4,
   blinkClose: 0.3, moveDeg: 6, attYaw: 30, attPitch: 25,
 };
-export const TUNE_POSE_DEFAULTS = { enabled: false, everyNthFrame: 2, wristTol: 0.12 };
+export const TUNE_POSE_DEFAULTS = { enabled: false, everyNthFrame: 2, wristTol: 0.12, visMin: 0.5 };
 
 // liveness: the owner candidate blinked or moved their head within
 // livenessMs, eyes open enough to trust the read. Shared by decide() (the
@@ -194,15 +194,25 @@ export function decide(input, tune, prev = {}) {
     const claims = [];
     for (const ps of poses) {
       let d = Infinity;
-      if (ps.wristL && ps.wristL.vis > 0.5) d = Math.min(d, Math.hypot(h.wx - ps.wristL.x, h.wy - ps.wristL.y));
-      if (ps.wristR && ps.wristR.vis > 0.5) d = Math.min(d, Math.hypot(h.wx - ps.wristR.x, h.wy - ps.wristR.y));
+      // DEGRADE, NEVER GUESS: only a wrist the pose model itself judged
+      // usable (visible AND actually inside the frame — see js/pose.js's
+      // `ok`) may claim a hand. A body with no usable wrist this frame
+      // simply cannot claim anything — it falls through to the
+      // face-distance rule below, which is today's shipped behaviour.
+      if (ps.wristL && ps.wristL.ok) d = Math.min(d, Math.hypot(h.wx - ps.wristL.x, h.wy - ps.wristL.y));
+      if (ps.wristR && ps.wristR.ok) d = Math.min(d, Math.hypot(h.wx - ps.wristR.x, h.wy - ps.wristR.y));
       if (d < P.wristTol) claims.push({ ps, d });
     }
     if (!claims.length) return null;
-    if (claims.length > 1 && Number.isFinite(input.owner && input.owner.prop)) {
-      // BODY PROPORTION (prop) is a TIE-BREAKER only — it never rejects a
-      // hand on its own, it only picks among bodies that already claimed it
-      claims.sort((a, b) => Math.abs(a.ps.prop - input.owner.prop) - Math.abs(b.ps.prop - input.owner.prop));
+    // BODY PROPORTION (prop) is a TIE-BREAKER only — it never rejects a
+    // hand on its own, it only picks among bodies that already claimed it.
+    // It must never GUESS: skip it entirely (fall back to nearest-wrist)
+    // unless the owner has an enrolled prop AND every claiming body's prop
+    // is a real number — one null prop (a framing that couldn't compute
+    // it) is enough to disqualify the whole tie-break, not just that body.
+    const ownerProp = input.owner && input.owner.prop;
+    if (claims.length > 1 && Number.isFinite(ownerProp) && claims.every(c => c.ps.prop != null)) {
+      claims.sort((a, b) => Math.abs(a.ps.prop - ownerProp) - Math.abs(b.ps.prop - ownerProp));
       return claims[0].ps;
     }
     claims.sort((a, b) => a.d - b.d);
