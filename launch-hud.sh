@@ -95,6 +95,6 @@ say "window floated + fullscreened (1920x1080 @ 0,0), sticky across workspaces"
 
 python3 tools/clickthrough.py "$XID" || fail "clickthrough.py could not make the window click-through — clicks would be stolen from your real desktop, so refusing to leave it up. Close it by hand (it has no titlebar: alt+click drag or i3's kill binding)."
 
-say "HUD is up. POINTER STARTS DISARMED — press A or hold the horns sign"
-say "(index + pinky out, middle + ring folded) for ~0.7s to arm it, Esc"
-say "always disarms instantly. See README.md's HUD section."
+say "HUD is up. POINTER STARTS DISARMED — press A, or POINT (index up)"
+say "(index up, other fingers folded) for ~0.7s to arm it. Make a FIST"
+say "to release it; Esc always disarms instantly. See README.md HUD section."

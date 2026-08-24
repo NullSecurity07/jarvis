@@ -421,7 +421,7 @@ setTimeout(function () {
 <div id="hint">tap the RING = orbs · tap an orb = its tree · TAP a card = open · pinch-drag = move · hold still ~1s = 3D rotate · two hands = scale · TAP an open item = close · CLAP (palms together, fingers up) = ring center-stage · CLAW: flash open, then freeze thumb+pinky and half-hook the other three (C facing the camera), aim, let it strain ~1s, SNAP = force pull · empty pinch dragged sideways = explode scrub · R respawn / C camera / D debug</div>
 <div id="debug"></div>
 <div id="toast"></div>
-<div id="hudbadge">POINTER IDLE · A or hold 🤘 to arm</div>
+<div id="hudbadge">POINTER IDLE · A or hold ☝ to arm</div>
 <!-- THE LIFT: a gamma curve for the detector's input (shadows up, highlights
      kept — a backlit hand brightens without the window clipping to white) -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -585,30 +585,38 @@ function hudSetArmed(v) {
   HUD.armed = v;
   const b = hudBadge();
   if (b) {
-    b.textContent = v ? "POINTER ARMED — Esc / A / 🤘-hold to release"
-                       : "POINTER IDLE · A or hold 🤘 to arm";
+    b.textContent = v ? "POINTER ARMED — make a FIST to release (or Esc / A)"
+                       : "POINTER IDLE · point ☝ and hold to arm (or A)";
     b.classList.toggle("armed", v);
   }
-  toast(v ? "pointer ARMED — your hand drives the real mouse now"
+  toast(v ? "pointer ARMED — your fingertip drives the mouse · fist to release"
           : "pointer idle — the mouse is yours again", 1600);
 }
 function hudToggleArmed() { if (HUD_MODE) hudSetArmed(!HUD.armed); }
 function hudDisarm() { if (HUD.armed) hudSetArmed(false); }
 
-// THE HORNS HOLD — owner-only, HUD-only. `ext` is the same 4-bool
-// [index,middle,ring,pinky] extension read the pinch/fist gate already
-// computes per-frame (see extArr below); this just names one more shape
-// out of it. cur carries its own dwell timer so a quick flash (< HUD_ARM_MS)
-// never fires, and re-forming the sign after release is required to
-// toggle again (no repeat-fire while held).
+// POINT TO TAKE THE MOUSE, FIST TO GIVE IT BACK (the user's call — the
+// horns sign was arbitrary; pointing is what a hand does when it means
+// "there"). `ext` is the same 4-bool [index,middle,ring,pinky] extension
+// the pinch/fist gate already computes per-frame.
+//
+// The two gestures are ASYMMETRIC on purpose, and that is the whole
+// design: pointing is also the posture you HOLD while driving the
+// cursor, so if pointing toggled, you would disarm yourself ~0.7s after
+// arming, every time. So point only ever ARMS, fist only ever RELEASES.
+// Each still needs its own dwell (a flash does nothing) and each must be
+// re-formed after the other to fire again.
 function hudGestureTick(cur, ext, now) {
-  const horns = ext[0] && !ext[1] && !ext[2] && ext[3];
-  if (!horns) { cur.hudHoldT = 0; cur.hudFired = false; return; }
+  const point = ext[0] && !ext[1] && !ext[2] && !ext[3] && !cur.pinched;
+  const fist  = !ext[0] && !ext[1] && !ext[2] && !ext[3];
+  const shape = point ? "point" : fist ? "fist" : null;
+  if (!shape) { cur.hudHoldT = 0; cur.hudShape = null; cur.hudFired = false; return; }
+  if (cur.hudShape !== shape) { cur.hudShape = shape; cur.hudHoldT = now; cur.hudFired = false; }
   if (!cur.hudHoldT) cur.hudHoldT = now;
-  if (!cur.hudFired && now - cur.hudHoldT >= HUD_ARM_MS) {
-    cur.hudFired = true;
-    hudToggleArmed();
-  }
+  if (cur.hudFired || now - cur.hudHoldT < HUD_ARM_MS) return;
+  cur.hudFired = true;
+  if (point && !HUD.armed) hudSetArmed(true);        // point NEVER disarms
+  else if (fist && HUD.armed) hudSetArmed(false);    // fist NEVER arms
 }
 
 // Runs once per frame, after every hand this tick has been processed —
@@ -640,7 +648,9 @@ function hudPointerTick(now) {
   // not assumed, so a decorated window still maps correctly.
   const offX = (window.screenX || 0) + (window.outerWidth - window.innerWidth) / 2;
   const offY = (window.screenY || 0) + (window.outerHeight - window.innerHeight);
-  const sx = Math.round(cur.x + offX), sy = Math.round(cur.y + offY);
+  const px0 = cur.tipX == null ? cur.x : cur.tipX;   // the index tip drives
+  const py0 = cur.tipY == null ? cur.y : cur.tipY;
+  const sx = Math.round(px0 + offX), sy = Math.round(py0 + offY);
   const dx = HUD.lastSend.x == null ? 999 : sx - HUD.lastSend.x;
   const dy = HUD.lastSend.y == null ? 999 : sy - HUD.lastSend.y;
   if (Math.hypot(dx, dy) < 1.5) return;
@@ -4664,6 +4674,13 @@ async function boot() {
                                           wl[4].z - wl[8].z) : NaN;
         cur.wcm = wcm; cur.lmRaw = lmsRaw;
         const px = (tip.x + thumb.x) / 2, py = (tip.y + thumb.y) / 2;
+        // THE FINGERTIP (the user's call): the board's cursor rides the
+        // pinch midpoint of index+thumb, which is right for grabbing but
+        // wrong for pointing — it sits off to the side of where you think
+        // you are aiming. The HUD pointer rides the INDEX TIP itself,
+        // through the same lerp so it is smoothed identically.
+        cur.tipX = cur.tipX == null ? tip.x : cur.tipX + (tip.x - cur.tipX) * TUNE.hands.cursorLerp;
+        cur.tipY = cur.tipY == null ? tip.y : cur.tipY + (tip.y - cur.tipY) * TUNE.hands.cursorLerp;
         cur.x += (px - cur.x) * TUNE.hands.cursorLerp;
         cur.y += (py - cur.y) * TUNE.hands.cursorLerp;
         cur.history.push({ x: cur.x, y: cur.y, t: now });
