@@ -899,7 +899,7 @@ _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
             "yank", "hover", "scroll_note", "widget", "explode", "assemble",
             "present", "clinic", "light", "reload", "dump",
             "enroll", "guest", "lock",          # THE OWNER LOCK
-            "mirror",                           # the camera dial, focus-free
+            "mirror", "deskfull",               # the camera dial + desk-as-a-screen
             "open_file",                        # THE FILES BROWSER
             "desk")                             # THE DESKS
 _MAX_QUEUE = 256        # a hidden board must not grow a silent backlog forever

@@ -151,8 +151,8 @@
     "lerp": 0.75,
     "deadPx": 0.6,
     "gesture": {
-      "tapIn": 0.62,
-      "tapOut": 0.85,
+      "tapIn": 0.45,
+      "tapOut": 0.55,
       "holdMs": 350,
       "doubleMs": 400,
       "scrollPxPerClick": 38

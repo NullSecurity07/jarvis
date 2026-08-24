@@ -308,6 +308,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   /* the 409 case: nothing was ever captured — an empty glass frame with
      the title/class already in the bar, NEVER a black square or a stale
      bitmap that could be mistaken for a real view */
+  /* A DESK AS A SCREEN (Task 31). The user has asked for this since the
+     beginning — "a new gesture to make a desktop into a screen, where it
+     will be full screen etc and i can work properly" — and it is also the
+     only way to get the pixels 1:1. In the grid a 1920-wide window is
+     drawn into a ~1500px card (78%), which is why text kept looking
+     soft. Full screen drops the bar and the frame entirely, so a
+     1920x1044 window lands at its own size on a 1920x1080 display: no
+     scaling at all. */
+  .panel.desk.full { position:fixed; left:0; top:0; width:100vw; height:100vh;
+                     border:none; border-radius:0; box-shadow:none;
+                     background:#000; z-index:900;
+                     align-items:center; justify-content:center; }
+  .panel.desk.full .bar { display:none; }
+  .panel.desk.full.ctl { box-shadow:inset 0 0 0 2px rgba(255,200,110,0.9); }
   /* the card your finger is driving right now (Task 26) */
   .panel.desk.ctl { box-shadow:0 0 0 2px rgba(255,200,110,0.85),
                                0 0 26px rgba(255,190,90,0.45); }
@@ -773,7 +787,14 @@ async function deskClick(hit, button) {
 // any fingertip: it stays far from the tip-to-tip distance the board's
 // own pinch test uses, so a click can never read as a pinch.
 const PTR_G = {
-  tapIn: 0.62, tapOut: 0.85,   // thumb-to-index-knuckle, in span units
+  // FITTED, not guessed (168 armed samples of this user's hand): the
+  // resting thumb sits at 0.60 span units with a hard mode there (94 of
+  // 168 samples in 0.6-0.7), and a deliberate press lands in 0.14-0.45.
+  // The old tapIn of 0.62 sat ABOVE the resting position, so 92% of all
+  // armed frames read as button-DOWN — the button was permanently held,
+  // every press instantly became a drag, and no click could ever fire.
+  // 0.45/0.55 straddles the gap between press and rest.
+  tapIn: 0.45, tapOut: 0.55,   // thumb-to-index-knuckle, in span units
   holdMs: 350,                 // contact longer than this = drag, not click
   doubleMs: 400,               // two taps inside this = the app sees a double
   scrollPxPerClick: 38,        // hand travel per wheel click
@@ -789,7 +810,23 @@ async function ptrSend(body) {
 
 // One hand, one frame. Runs only while the pointer is armed and only for
 // the owner's driving hand — the same gate every other pointer send uses.
-function ptrMouseTick(cur, lms, span, extArr, now) {
+// A finger is "out" judged in METRIC 3D, not on screen. The 2D test the
+// board uses elsewhere compares wrist-to-tip against wrist-to-knuckle in
+// image space, and pointing AT the camera foreshortens the index until it
+// looks folded: measured, the index read as NOT extended on 106 of 168
+// armed frames while the user was actively pointing. worldLandmarks are
+// hand-centred metres, so the same pose reads the same whatever direction
+// it aims. Falls back to the 2D read when the model gives no world hand.
+function ptrFingersOut(wl, extArr) {
+  if (!wl) return (extArr[0] ? 1 : 0) + (extArr[1] ? 1 : 0) + (extArr[2] ? 1 : 0);
+  const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+  let n = 0;
+  for (const [tip, mcp] of [[8, 5], [12, 9], [16, 13]])
+    if (d3(wl[tip], wl[0]) > 1.35 * d3(wl[mcp], wl[0])) n++;
+  return n;
+}
+
+function ptrMouseTick(cur, lms, span, extArr, now, wl) {
   if (!PTR_CFG || !PTR_CFG.click || !span) { cur.ptrBtn = null; return; }
   const g = { ...PTR_G, ...((TUNE.pointer && TUNE.pointer.gesture) || {}) };
   const th = lms[4];
@@ -798,7 +835,7 @@ function ptrMouseTick(cur, lms, span, extArr, now) {
   // WHICH BUTTON: how many fingers are out. 1 = left, 2 = right, 3 =
   // middle. Chosen this way because adding a finger is easy from the
   // pointing pose, while reaching a folded fingertip with the thumb is not.
-  const nOut = (extArr[0] ? 1 : 0) + (extArr[1] ? 1 : 0) + (extArr[2] ? 1 : 0);
+  const nOut = ptrFingersOut(wl, extArr);
   const button = nOut >= 3 ? 2 : nOut === 2 ? 3 : 1;
   cur.ptrButtonHint = button;
 
@@ -829,6 +866,11 @@ function ptrMouseTick(cur, lms, span, extArr, now) {
   // thumb and put the two thresholds either side of the gap.
   HUD.thumb = Math.round(nearD * 100) / 100;
   HUD.nOut = nOut;
+  // the same measurement in centimetres, for fitting a metric threshold
+  // next round: unlike the span-normalised one it cannot drift with hand
+  // angle or distance from the lens
+  if (wl) HUD.thumbCm = Math.round(1000 * Math.hypot(
+    wl[4].x - wl[5].x, wl[4].y - wl[5].y, wl[4].z - wl[5].z)) / 10;
   const contact = cur.ptrContact
     ? nearD < g.tapOut          // already down: hold until it clearly lifts
     : nearD < g.tapIn;          // not down: needs a firm press to start
@@ -2197,6 +2239,11 @@ function applyCmds(cmds) {
     } else if (c.a === "enroll") {          // forget the owner, re-arm the auto window
       fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) })
         .then(() => { LOCK.owner = null; LOCK.enrolled = false; LOCK.enroll = null; LOCK.state = {}; toast("owner forgotten — look at the camera alone for 3s to enroll", 4000); }).catch(() => {});
+    } else if (c.a === "deskfull") {
+      // reachable without keyboard focus, like the mirror — the board is
+      // click-through and this i3 is focus_follows_mouse, so a key alone
+      // is not a dependable way to reach anything
+      deskFullToggle();
     } else if (c.a === "mirror") {
       // THE MIRROR DIAL, WITHOUT KEYBOARD FOCUS (Task 26). M only works
       // while the board holds focus, and this i3 is `focus_follows_mouse
@@ -2790,6 +2837,45 @@ function stageDesk(xid, title) {
   retileDesks();
   desksHealthCheck();   // Task 19: badge lands right away, not on the next 4s tick
   return it;
+}
+
+// FULL SCREEN, AND BACK. Sizes the body to the largest box with the
+// frame's aspect that fits the viewport, so the image fills it exactly
+// and deskPointAt's mapping stays true (its whole contract is that the
+// img's box IS the displayed pixels). At 1920x1044 on a 1920x1080 screen
+// that is the frame's own size — 1:1, no resampling.
+function deskSetFull(it, on) {
+  if (!it || !it.el) return;
+  const body = it.el.querySelector(".body");
+  it.full = !!on;
+  it.el.classList.toggle("full", it.full);
+  if (!it.full) {
+    it.el.style.transform = "";
+    if (body) { body.style.width = ""; body.style.height = ""; }
+    it._fitW = it._fitH = null;                 // let the normal fit redo itself
+    const img = it.el.querySelector(".body img");
+    if (img && img.naturalWidth) deskFitAspect(it, img);
+    if (typeof retileDesks === "function") retileDesks();
+    toast("desk back on the glass", 1200);
+    return;
+  }
+  const nw = it.natW || 16, nh = it.natH || 9, a = nw / nh;
+  const w = Math.min(innerWidth, innerHeight * a);
+  if (body) { body.style.width = Math.round(w) + "px";
+              body.style.height = Math.round(w / a) + "px"; }
+  it.el.style.transform = "";                   // the render loop leaves .full alone
+  toast(`desk full screen — ${nw}x${nh} at 1:1 · Z or a fist to come back`, 2400);
+}
+
+function deskFullToggle() {
+  const cards = items.filter(i => i.type === "desk" && i.el);
+  if (!cards.length) { toast("no desk on the glass to open", 1600); return; }
+  const already = cards.find(i => i.full);
+  if (already) { deskSetFull(already, false); return; }
+  // the one being driven, else the one most recently touched, else the only one
+  const target = cards.find(i => i.id === HUD.overDesk)
+              || cards.find(i => i.id === lastTouchedId) || cards[0];
+  deskSetFull(target, true);
 }
 
 // Resize a desk card so its BODY has exactly the frame's aspect ratio.
@@ -3882,6 +3968,7 @@ addEventListener("keydown", e => {
   if (HUD_MODE && (e.key === "a" || e.key === "A")) hudToggleArmed();
   // live respawn: re-read the notes AND props trees from disk before
   // redrawing — a freshly dropped file appears on a plain R press
+  if (e.key === "z" || e.key === "Z") deskFullToggle();   // a desk as a screen
   if (e.key === "r" || e.key === "R") loadTree().then(() => spawnStage());
   if (e.key === "d" || e.key === "D") dbg.style.display = dbg.style.display === "block" ? "none" : "block";
   if (e.key === "c" || e.key === "C") cycleCam();
@@ -4510,6 +4597,7 @@ function physics(dt) {
     // Correcting it at any single later moment kept losing to ordering,
     // so the ceiling is enforced HERE, every frame, against the box as it
     // actually is. Cheap: w/h are already measured just above.
+    if (c.type === "desk" && c.full) return;   // full screen: CSS owns it
     let sc = c.scale * (c.hs || 1) * (c.inS || 1);
     if (c.type === "desk" && w > 0 && h > 0) {
       const cap = Math.min((innerWidth - 40) / w, (innerHeight - 40) / h);
@@ -5430,7 +5518,7 @@ async function boot() {
         // THE HAND IS A MOUSE (Task 28) — only while armed, only the
         // owner, same gate as every other pointer send.
         if (HUD_MODE && HUD.armed && cur.role === "owner") {
-          ptrMouseTick(cur, lms, span, extArr, now);
+          ptrMouseTick(cur, lms, span, extArr, now, (res.worldLandmarks || [])[mi]);
           // WHILE ARMED, THIS HAND IS A MOUSE AND NOTHING ELSE (Task 29).
           // The user: "if i open it, it will go to pinch mode (like it
           // should)" — opening a finger to pick a button was falling
@@ -6288,6 +6376,7 @@ function pushState(now) {
            // the first desk card's real box + the frame's natural size,
            // reported whether or not a hand is near it, so the sizing can
            // be verified from a headless page instead of a screenshot
+           thumbCm: HUD.thumbCm == null ? null : HUD.thumbCm,
            card: (() => {
              const it = items.find(i => i.type === "desk" && i.el);
              if (!it) return null;
