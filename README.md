@@ -100,11 +100,44 @@ A `Desks` orb turns the board into a live view of your own machine — tap it an
 
 **i3/X11 only, and only the visible workspace is ever actually live.** `maim -i <xid>` captures the screen REGION a window occupies, not the window's own contents — on a workspace that isn't currently visible, that region belongs to whatever workspace IS onscreen, so it would silently hand back the wrong window's pixels. And there's no way around it: i3 unmaps a window the moment its workspace is hidden (`xprop WM_STATE` reports `Withdrawn`), and an unmapped window has no backing pixels for anything — `maim`, `import`, `xwd`, all of them — to read. So the board never even tries: `/desks/shot` and `/desks/stream` only call `maim` for a window whose workspace is currently visible (`capturable` in the `/desks` response). For everything else, a card shows the **last frame that window ever produced**, honestly aged — its badge reads `LIVE` (green) while the workspace is visible, `HIDDEN · Nm ago` (grey) while showing that cached frame, or `HIDDEN · no view yet` with an empty glass frame if nothing was ever captured. The one way to refresh a hidden window is the card's small **refresh** tap: it switches to that workspace, waits for the window to paint, captures, and switches straight back — a real flicker on your actual screen, which is why it's tap-only, never automatic and never on a timer. Missing the `desks` key entirely, or `"enabled": false`, disables the feature completely: every `/desks*` endpoint 404s, and the orb never appears.
 
-**Control is limited to i3 commands** — `workspace`, `focus`, `fullscreen`, `peek` — sent through a server-side allowlist, never free-form text. There's no synthetic mouse or keyboard input (this machine doesn't have `xdotool`), and `kill` is not implemented: gesture-driven window control never closes anything for you. `move` and `layout` aren't in the allowlist either — the page never calls them, and both act on more than "this one window" (`move` relocates a whole container between workspaces; `layout` re-lays-out whatever's currently focused) with no undo from the board, so they stay out until something actually needs them. `peek` (above) is the sole exception carved out for refreshing a hidden window, and it's scoped tightly: it only switches to and back from the one workspace the requested window is already on. Desk cards are their own item type, deliberately flat and un-relief'd — a live desktop rendered as an embossed 3D scene would be unreadable, unlike a staged still image.
+**Control is limited to i3 commands** — `workspace`, `focus`, `fullscreen`, `peek` — sent through a server-side allowlist, never free-form text. The Desks channel itself has no synthetic mouse or keyboard input, and `kill` is not implemented: gesture-driven window control never closes anything for you. (The HUD, below, is a separate feature — a real synthetic pointer, deliberately scoped to move-only, gated by the owner lock, and off unless you turn it on.) `move` and `layout` aren't in the allowlist either — the page never calls them, and both act on more than "this one window" (`move` relocates a whole container between workspaces; `layout` re-lays-out whatever's currently focused) with no undo from the board, so they stay out until something actually needs them. `peek` (above) is the sole exception carved out for refreshing a hidden window, and it's scoped tightly: it only switches to and back from the one workspace the requested window is already on. Desk cards are their own item type, deliberately flat and un-relief'd — a live desktop rendered as an embossed 3D scene would be unreadable, unlike a staged still image.
 
 **Privacy.** Every capture is served from `/desks/shot` and `/desks/stream` on localhost only, exactly like everything else here — nothing leaves your machine. The board's own window (and the status bar) are always excluded from the workspace/window list, so the glass never mirrors itself.
 
 `bin/board.sh '{"a":"desk","xid":N}'` (a specific window) or `'{"a":"desk","ws":1}'` (every window on a workspace) stages a live card from your AI, jailed the same way a tap is — the server re-checks the xid/workspace against the current i3 tree before doing anything.
+
+## The HUD — pointer follow over your real desktop
+
+Mirroring a desktop onto the glass turned out to be impossible on X11 (i3 unmaps any window that isn't currently visible, so there are no pixels left for anything to capture — see the Desks section above). The HUD is the other way around: instead of showing your desktop on the glass, it puts the glass **on top of** your desktop. Your real browser, terminal, whatever's open — stays exactly where it is, fully visible, and the board's ring + glass items float above it on a transparent window. Your hand's tracked position drives the real system pointer, so you point at your actual desktop the way you'd use a mouse in the air.
+
+```
+./launch-hud.sh
+```
+
+This opens `stage.html?mode=overlay&hud=1` in its own transparent, click-through, borderless, fullscreen Chrome window (floated and stickied across every workspace by i3), starting the server first if it isn't already up.
+
+**Enable it** in `jarvis.json`:
+
+```json
+"pointer": { "enabled": true, "rateHz": 90 }
+```
+
+`enabled: false` (or the key missing entirely) makes `POST /pointer` 404 — the HUD page still opens, but hands only hover, nothing moves. `rateHz` caps how often the server will actually move the pointer (dropped, never queued, so the cursor can't lag behind in a backlog); the page throttles its own sends to the same number.
+
+**Scope, this round: FOLLOW ONLY.** No click, no scroll, no drag, no keyboard — `POST /pointer` accepts `{"a":"move",...}` and refuses everything else with a 400. Clicking is a deliberate later step, once the tracking itself feels right.
+
+**The pointer law.**
+- Pointer control **starts disarmed**, every time, no exceptions. While disarmed, nothing is ever sent to `/pointer`.
+- Arm it with the **`A`** key, or by holding the **horns sign** (index + pinky extended, middle + ring folded — the "rock on" hand) for about 0.7 seconds. That shape was picked because it's off the board's entire existing vocabulary — not the pinch, not a fist, not the four-finger palm-open (used for the close-swipe), not thumbs-up (already means "approve this guest"), not the clap, not the claw — so nothing you'd naturally do reaching for a card, resting your hand, or gesturing at the board arms it by accident, and the hold requirement means even a deliberate flash of the shape does nothing without real commitment.
+- **The owner lock gates every send**: a move is only ever sent for a hand whose role is `owner`, while the lock reads unlocked. A guest's hand, a stranger's hand, or a locked board never drives the pointer — and if the lock flips to locked while armed, the HUD disarms itself instantly, the same frame.
+- **`Escape` disarms instantly, always**, independent of everything else.
+- The badge at the top of the screen never leaves you guessing: **POINTER IDLE** normally, **POINTER ARMED** (warm/amber, pulsing) whenever a hand could actually be moving your mouse right now.
+
+**Which hand drives:** the owner's first tracked hand; if the owner has two hands in frame, whichever one is *not* currently pinching (so mid-grab on one hand never fights the pointer on the other). The position sent is the same One-Euro-filtered, lerp-smoothed cursor position the board already computes for that hand — nothing new to tune.
+
+**Watch this while they're driving it live:** the badge (armed vs idle) and the real system pointer itself — if the badge says ARMED and the cursor isn't tracking the hand, or the badge is wrong about which state you're in, that's the bug to chase first, before anything gesture-shaped.
+
+`state/state`'s heartbeat (and `/state`) carries `hud: {on, armed, hz}` so this is checkable without a camera — from another terminal, `curl -s 127.0.0.1:8794/state | python3 -c "import json,sys;print(json.load(sys.stdin).get('hud'))"` (only meaningful while the tracker page is open and pushing).
 
 ## Streaming
 

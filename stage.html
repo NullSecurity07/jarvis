@@ -336,6 +336,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   .guestchip.stranger { border-color:rgba(255,90,90,0.8); color:#ffc1c1; }
   .guestchip.hot { box-shadow:0 0 18px rgba(255,220,120,0.55); }
   body.overlay #facelayer, body.keybg #facelayer { display:none; }
+  /* THE HUD (Task 20): keeps the face HUD showing even though it's an
+     overlay (the more specific selector wins over the rule above) —
+     the ring + glass items + face HUD stay, only the camera self-view
+     and hint bar are gone (already true for any overlay). */
+  body.hud #facelayer { display:block; }
+  #hudbadge { position:absolute; top:14px; left:50%; transform:translateX(-50%);
+              z-index:999; display:none; padding:9px 18px; border-radius:999px;
+              font:600 13px/1.4 "SF Mono",Menlo,monospace; letter-spacing:.06em;
+              backdrop-filter:blur(10px); white-space:nowrap;
+              border:1.5px solid rgba(200,255,240,0.35);
+              background:rgba(8,28,32,0.62); color:#bfe8de;
+              box-shadow:0 6px 24px rgba(0,0,0,0.35); }
+  body.hud #hudbadge { display:block; }
+  #hudbadge.armed { color:#1a0a06; background:rgba(255,176,64,0.92);
+                    border-color:rgba(255,214,140,0.9);
+                    box-shadow:0 0 22px rgba(255,150,40,0.65), 0 6px 24px rgba(0,0,0,0.35);
+                    animation: hudpulse 1.6s ease-in-out infinite; }
+  @keyframes hudpulse { 0%,100% { box-shadow:0 0 16px rgba(255,150,40,0.5); }
+                         50% { box-shadow:0 0 30px rgba(255,150,40,0.85); } }
   /* (an earlier whole-screen voice-pulse border was removed —
      THE RING is the assistant's presence now.) */
   #boot { position:absolute; inset:0; display:flex; align-items:center;
@@ -390,6 +409,7 @@ setTimeout(function () {
 <div id="hint">tap the RING = orbs · tap an orb = its tree · TAP a card = open · pinch-drag = move · hold still ~1s = 3D rotate · two hands = scale · TAP an open item = close · CLAP (palms together, fingers up) = ring center-stage · CLAW: flash open, then freeze thumb+pinky and half-hook the other three (C facing the camera), aim, let it strain ~1s, SNAP = force pull · empty pinch dragged sideways = explode scrub · R respawn / C camera / D debug</div>
 <div id="debug"></div>
 <div id="toast"></div>
+<div id="hudbadge">POINTER IDLE · A or hold 🤘 to arm</div>
 <!-- THE LIFT: a gamma curve for the detector's input (shadows up, highlights
      kept — a backlit hand brightens without the window clipping to white) -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -523,6 +543,100 @@ const LOCK = {
   driftT: 0, driftBusy: false,           // last template-drift write / write in flight (Task 11 Part B)
   geomTried: false,                      // THE GEOMETRY BACKFILL tried once this page load (Task 14 #7)
 };
+
+// ==== THE HUD (Task 20): the glass over the real desktop, hands driving
+// the real pointer. THE POINTER LAW, non-negotiable:
+//   - starts DISARMED. While disarmed nothing is ever sent to /pointer.
+//   - arming is deliberate: the A key, or holding the HORNS sign (index +
+//     pinky out, middle + ring folded — the "rock on" hand) for
+//     HUD_ARM_MS. Chosen because it is OFF the board's entire existing
+//     vocabulary: not the pinch (thumb+index touch), not the fist, not
+//     palmOpen (4 fingers, used for the close-swipe), not thumbsUp
+//     (already means "approve this guest"), not the clap or the claw.
+//     Nobody rests a hand, reaches for a card, or pinches something in
+//     this shape by accident — and the hold requirement means even a
+//     deliberate flash of it does nothing without ~0.7s of commitment.
+//   - the owner lock gates every SEND regardless of armed state: a move
+//     only ever goes out for a hand whose role is "owner" while the
+//     verdict reads unlocked (see hudPointerTick). No verdict yet, or
+//     the verdict flips to locked, disarms immediately — see the top of
+//     hudPointerTick, which runs on every frame BADGE included, so the
+//     visible state can never lie about whether a hand can move the mouse.
+//   - Escape disarms instantly, always, independent of everything above.
+const HUD_ARM_MS = 700;
+const HUD = { armed: false, lastSend: { t: 0, x: null, y: null } };
+let PTR_CFG = { enabled: false, rateHz: 90 };   // filled from /config in boot()
+
+function hudBadge() { return document.getElementById("hudbadge"); }
+function hudSetArmed(v) {
+  if (HUD.armed === v) return;
+  HUD.armed = v;
+  const b = hudBadge();
+  if (b) {
+    b.textContent = v ? "POINTER ARMED — Esc / A / 🤘-hold to release"
+                       : "POINTER IDLE · A or hold 🤘 to arm";
+    b.classList.toggle("armed", v);
+  }
+  toast(v ? "pointer ARMED — your hand drives the real mouse now"
+          : "pointer idle — the mouse is yours again", 1600);
+}
+function hudToggleArmed() { if (HUD_MODE) hudSetArmed(!HUD.armed); }
+function hudDisarm() { if (HUD.armed) hudSetArmed(false); }
+
+// THE HORNS HOLD — owner-only, HUD-only. `ext` is the same 4-bool
+// [index,middle,ring,pinky] extension read the pinch/fist gate already
+// computes per-frame (see extArr below); this just names one more shape
+// out of it. cur carries its own dwell timer so a quick flash (< HUD_ARM_MS)
+// never fires, and re-forming the sign after release is required to
+// toggle again (no repeat-fire while held).
+function hudGestureTick(cur, ext, now) {
+  const horns = ext[0] && !ext[1] && !ext[2] && ext[3];
+  if (!horns) { cur.hudHoldT = 0; cur.hudFired = false; return; }
+  if (!cur.hudHoldT) cur.hudHoldT = now;
+  if (!cur.hudFired && now - cur.hudHoldT >= HUD_ARM_MS) {
+    cur.hudFired = true;
+    hudToggleArmed();
+  }
+}
+
+// Runs once per frame, after every hand this tick has been processed —
+// see the call site below, right after the per-hand forEach. Picks the
+// DRIVING hand fresh every frame (the owner's first tracked hand; if two
+// owner hands are live, prefer whichever is NOT pinching, so a grab in
+// progress on one hand never fights the pointer on the other).
+function hudPointerTick(now) {
+  // THE POINTER LAW, literally: unlocked verdict required — no verdict
+  // yet (still booting) counts as locked, fail-closed, on purpose.
+  const locked = !LOCK.verdict || LOCK.verdict.locked;
+  if (locked) { hudDisarm(); return; }        // THE LAW: lock wins, instantly
+  if (!HUD.armed) return;
+  const ownerIds = Object.keys(cursors).map(Number)
+    .filter(i => { const c = cursors[i]; return c.seenNow && !c.blocked && c.role === "owner"; })
+    .sort((a, b) => a - b);
+  if (!ownerIds.length) return;
+  let driveId = ownerIds[0];
+  if (ownerIds.length > 1) {
+    const nonPinch = ownerIds.find(i => !cursors[i].pinched);
+    if (nonPinch !== undefined) driveId = nonPinch;
+  }
+  const cur = cursors[driveId];
+  const rateHz = (PTR_CFG && PTR_CFG.rateHz) || 90;
+  if (now - HUD.lastSend.t < 1000 / rateHz) return;
+  // window px -> screen px: the overlay is sized to cover the whole
+  // screen (launch-hud.sh floats/fullscreens it with i3), so this is
+  // 1:1 plus whatever chrome the browser window itself adds — computed,
+  // not assumed, so a decorated window still maps correctly.
+  const offX = (window.screenX || 0) + (window.outerWidth - window.innerWidth) / 2;
+  const offY = (window.screenY || 0) + (window.outerHeight - window.innerHeight);
+  const sx = Math.round(cur.x + offX), sy = Math.round(cur.y + offY);
+  const dx = HUD.lastSend.x == null ? 999 : sx - HUD.lastSend.x;
+  const dy = HUD.lastSend.y == null ? 999 : sy - HUD.lastSend.y;
+  if (Math.hypot(dx, dy) < 1.5) return;
+  HUD.lastSend = { t: now, x: sx, y: sy };
+  fetch("/pointer", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ a: "move", x: sx, y: sy }) }).catch(() => {});
+}
+
 // THE TWO-SIDED SEARCH (Task 15): ?hands2=0 = local override for one launch.
 const HANDS2_Q = Q.get("hands2") !== "0";
 let IDENT = null, FACES = null, POSE = null;
@@ -551,6 +665,12 @@ if (MODE === "overlay") {
   document.documentElement.style.background = "transparent";
   document.body.style.background = "transparent";
 }
+// THE HUD (Task 20): the glass floats over the REAL desktop and the
+// hands drive the REAL pointer. Only meaningful paired with mode=overlay
+// — hud=1 alone (no overlay) is a no-op, since the HUD's whole point is
+// showing the desktop through a transparent board.
+const HUD_MODE = MODE === "overlay" && Q.get("hud") === "1";
+if (HUD_MODE) document.body.classList.add("hud");
 if (MODE === "key") {
   const KEYS = { magenta: "#ff00ff", green: "#00ff00", blue: "#0000ff" };
   const want = (Q.get("key") || "magenta").toLowerCase();
@@ -3242,6 +3362,10 @@ const HANDS = (() => {
 })();
 
 addEventListener("keydown", e => {
+  // Escape always disarms the HUD's pointer control, no matter what else
+  // is going on — checked first, unconditionally, every keypress.
+  if (e.key === "Escape") hudDisarm();
+  if (HUD_MODE && (e.key === "a" || e.key === "A")) hudToggleArmed();
   // live respawn: re-read the notes AND props trees from disk before
   // redrawing — a freshly dropped file appears on a plain R press
   if (e.key === "r" || e.key === "R") loadTree().then(() => spawnStage());
@@ -4321,6 +4445,7 @@ async function boot() {
     if (!Q.get("fps") && !localStorage.getItem("stage-light") &&
         (f === "fast" || f === "30" || f === "light"))
       CAMGOV.G.mode = f === "light" ? "light" : "fast";
+    if (cfg.pointer) PTR_CFG = cfg.pointer;   // Task 20: the HUD's client-side send rate
   } catch (_) {}
   await pickInitialCam();
   _vision = await FilesetResolver.forVisionTasks(
@@ -4674,6 +4799,10 @@ async function boot() {
         } else cur.badRun = 0;
         if (cur.pinched) cur.lastPinchT = now;   // v3.9: clap disqualifier
         cur.el.classList.toggle("pinched", cur.pinched);
+        // ---- THE HORNS HOLD (owner's hand only, HUD mode only): arms
+        // or disarms pointer control. See hudGestureTick's comment for
+        // why this shape and not any gesture already in the vocabulary.
+        if (HUD_MODE && cur.role === "owner") hudGestureTick(cur, extArr, now);
         // ---- GUEST APPROVAL (owner's hand only): thumbs-up held, or a
         // tap on a candidate's chip; a tap on a guest's chip revokes.
         if (cur.role === "owner" && V.guestCandidates.length + Object.keys(LOCK.approvals).length) {
@@ -5279,6 +5408,8 @@ async function boot() {
             `\n  palm ${cur.palmOpen ? "OPEN" : "-"}${cur.fpSplay ? " CLAW" : ""} pull ph${cur.fp ? cur.fp.ph : 0}` +
             `  ${cur.fpDbg || ""}`;
       });
+      if (HUD_MODE) hudPointerTick(now);   // Task 20: after every hand, so
+                                           // it can pick among all of them
       { // THE TAPE — one compact row per detected frame, 3 minutes deep
         const row = { t: Math.round(now), h: [] };
         for (const k of Object.keys(cursors)) {
@@ -5493,6 +5624,9 @@ function pushState(now) {
     ack: CMD_ACK,
     lock: { on: LOCK.verdict ? LOCK.verdict.locked : null, why: LOCK.verdict ? LOCK.verdict.why : "booting",
             since: LOCK.since || 0, enrolled: LOCK.enrolled, ident: IDENT ? IDENT.mode : "none" },
+    // Task 20: lets the controller verify the HUD's live state (armed or
+    // not) without a camera — just by reading this heartbeat.
+    hud: { on: HUD_MODE, armed: HUD.armed, hz: (PTR_CFG && PTR_CFG.rateHz) || 90 },
     faces: FACES ? FACES.list().filter(f => f.seenNow).map(f => ({
       id: f.id, role: (LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "unknown",
       x: +f.cx.toFixed(3), y: +f.cy.toFixed(3), w: +f.w.toFixed(3), h: +f.h.toFixed(3),

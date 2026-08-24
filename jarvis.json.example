@@ -22,6 +22,10 @@
     "aliveMs": 1500,
     "display": ":0",
     "xauthority": "/run/user/1000/lyxauth"
+  },
+  "pointer": {
+    "enabled": true,
+    "rateHz": 90
   }
 }
 

@@ -59,6 +59,11 @@ Endpoints:
   POST /cam                    governor + camera clinic set them here)
   POST /dump                   the stage's tape (state/tape.json) and its
                                black box (state/errors.log)
+  POST /pointer                THE HUD's real-pointer bridge (Task 20):
+                               {"a":"move","x":N,"y":N} moves the actual
+                               X pointer via XTest — FOLLOW ONLY, every
+                               other action 400s. pointer.enabled:false
+                               (the default) 404s the whole route.
 
 Config lives in jarvis.json next to this file (re-read whenever it changes;
 no restart needed):
@@ -189,6 +194,19 @@ def _read_config():
     except Exception:
         desks["aliveMs"] = 1500
     cfg["desks"] = desks
+    # THE HUD's pointer bridge (Task 20): OFF by default — a config file
+    # that predates this feature must not suddenly grant real-pointer
+    # control. rateHz caps the server-side XTest call rate (drop, don't
+    # queue); the client throttles to the same number independently.
+    pointer = cfg.get("pointer") if isinstance(cfg.get("pointer"), dict) else {}
+    pointer.setdefault("enabled", False)
+    pointer.setdefault("rateHz", 90)
+    pointer["enabled"] = bool(pointer["enabled"])
+    try:
+        pointer["rateHz"] = max(1, min(240, int(pointer["rateHz"])))
+    except Exception:
+        pointer["rateHz"] = 90
+    cfg["pointer"] = pointer
     return cfg
 
 
@@ -228,6 +246,89 @@ def files_root(i):
         return p.resolve()
     except Exception:
         return None
+
+
+# ---- THE POINTER (Task 20): a module-level XTest singleton for the HUD.
+# Opens the real X display ONCE, lazily, on the first /pointer call, and
+# reuses it forever — xdotool costs ~8ms per spawn (benchmarked) and a
+# continuous hand-follow stream would spawn dozens of times a second, so
+# only a live libX11/libXtst handle (0.006ms/call, benchmarked) is fast
+# enough. FOLLOW ONLY: this module knows how to move the pointer and
+# nothing else — no click, no key, no button state — so there is no path
+# through it that could do more than /pointer's own action allowlist lets
+# through (see do_POST's "/pointer" branch, which is the only caller).
+_PTR_LOCK = threading.Lock()
+_PTR = {"disp": None, "x11": None, "xtst": None, "w": None, "h": None,
+        "lastT": 0.0, "err": None}
+
+
+def _ptr_open():
+    """Open the display and cache libX11/libXtst + screen bounds. Safe to
+    call every request — after the first success (or first failure) it's
+    just a dict read. Must set ctypes restype/argtypes before ANY call:
+    left at the ctypes default (c_int), the display pointer truncates to
+    32 bits and the process segfaults the moment XFlush touches it."""
+    if _PTR["disp"] is not None or _PTR["err"]:
+        return _PTR["disp"] is not None
+    try:
+        import ctypes
+        import ctypes.util
+        x11 = ctypes.CDLL(ctypes.util.find_library("X11"))
+        xtst = ctypes.CDLL(ctypes.util.find_library("Xtst"))
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XDefaultScreen.restype = ctypes.c_int
+        x11.XDefaultScreen.argtypes = [ctypes.c_void_p]
+        x11.XDisplayWidth.restype = ctypes.c_int
+        x11.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        x11.XDisplayHeight.restype = ctypes.c_int
+        x11.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        x11.XFlush.argtypes = [ctypes.c_void_p]
+        xtst.XTestFakeMotionEvent.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.c_ulong]
+        # same DISPLAY/XAUTHORITY fallback the desks feature uses (server
+        # is normally launched inside the user's own X session already,
+        # so this only matters if it wasn't)
+        d = config().get("desks", {})
+        if "XAUTHORITY" not in os.environ:
+            os.environ["XAUTHORITY"] = str(d.get("xauthority", "/run/user/1000/lyxauth"))
+        name = (os.environ.get("DISPLAY") or d.get("display") or ":0").encode()
+        disp = x11.XOpenDisplay(name)
+        if not disp:
+            _PTR["err"] = f"XOpenDisplay({name!r}) failed"
+            return False
+        scr = x11.XDefaultScreen(disp)
+        _PTR.update(disp=disp, x11=x11, xtst=xtst,
+                    w=x11.XDisplayWidth(disp, scr), h=x11.XDisplayHeight(disp, scr))
+        return True
+    except Exception as e:
+        _PTR["err"] = f"X11/XTest unavailable: {e}"
+        return False
+
+
+def ptr_move(x, y, rate_hz):
+    """Move the real pointer to (x, y), clamped to the real screen bounds.
+    Rate-limited server-side to rate_hz — a call arriving too soon after
+    the last one is DROPPED, never queued (a queued backlog would make
+    the pointer visibly lag behind the hand). Returns one of
+    ("moved"|"dropped"|"error", detail_or_None)."""
+    with _PTR_LOCK:
+        if not _ptr_open():
+            return "error", _PTR["err"] or "X11 unavailable"
+        now = time.monotonic()
+        if now - _PTR["lastT"] < 1.0 / max(1, rate_hz):
+            return "dropped", None
+        _PTR["lastT"] = now
+        w, h = _PTR["w"] or 1920, _PTR["h"] or 1080
+        cx = max(0, min(w - 1, int(x)))
+        cy = max(0, min(h - 1, int(y)))
+        try:
+            _PTR["xtst"].XTestFakeMotionEvent(_PTR["disp"], -1, cx, cy, 0)
+            _PTR["x11"].XFlush(_PTR["disp"])
+        except Exception as e:
+            return "error", f"XTest call failed: {e}"
+        return "moved", None
 
 
 def _jail_resolve(root, rel):
@@ -947,7 +1048,8 @@ class Handler(SimpleHTTPRequestHandler):
         # included — it persists state/board.json and overwrites the live
         # scene, so a cross-site POST /state {"items":[]} is just as much
         # a write as any of the others.
-        if path in ("/cmd", "/desks/cmd", "/owner", "/cam", "/dump", "/state") \
+        if path in ("/cmd", "/desks/cmd", "/owner", "/cam", "/dump", "/state",
+                    "/pointer") \
                 and not self._csrf_ok():
             self.send_response(403)
             self.end_headers()
@@ -1206,6 +1308,43 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self._json({"ok": True})
             return
+        if path == "/pointer":
+            # THE HUD's real-pointer bridge (Task 20). SCOPE: pointer
+            # FOLLOW only — "a" must be "move", everything else 400s on
+            # purpose (click/scroll/drag/key are refused BY DESIGN, not
+            # just unbuilt — see the HUD README section). Host + CSRF are
+            # already enforced above, same as every other write route;
+            # the owner-lock / hand-role gate lives entirely in the page
+            # (it decides whether to send at all) — this endpoint has no
+            # identity of its own to check.
+            pcfg = config().get("pointer", {})
+            if not pcfg.get("enabled"):
+                self.send_response(404)
+                self.end_headers()
+                return
+            try:
+                req = json.loads(body)
+                assert isinstance(req, dict)
+            except Exception:
+                self._json({"err": "bad json"}, 400)
+                return
+            if req.get("a") != "move":
+                self._json({"err": "pointer: only 'move' is implemented — "
+                                    "click/scroll/drag/key are refused"}, 400)
+                return
+            x, y = req.get("x"), req.get("y")
+            if isinstance(x, bool) or isinstance(y, bool) \
+                    or not isinstance(x, int) or not isinstance(y, int):
+                self._json({"err": "pointer: x/y must be integers"}, 400)
+                return
+            status, err = ptr_move(x, y, pcfg.get("rateHz", 90))
+            if status == "error":
+                self._json({"err": err}, 503)
+            elif status == "dropped":
+                self._json({"ok": True, "dropped": True})
+            else:
+                self._json({"ok": True})
+            return
         self.send_response(404)
         self.end_headers()
 
@@ -1234,7 +1373,9 @@ class Handler(SimpleHTTPRequestHandler):
             self._json({"name": cfg.get("name", "JARVIS"),
                         "res": cfg.get("res"), "fps": cfg.get("fps"),
                         "orbs": orbs,
-                        "desksMax": cfg.get("desks", {}).get("maxStreams", 3)})
+                        "desksMax": cfg.get("desks", {}).get("maxStreams", 3),
+                        "pointer": {"enabled": cfg.get("pointer", {}).get("enabled", False),
+                                    "rateHz": cfg.get("pointer", {}).get("rateHz", 90)}})
             return
         if path == "/tuning":
             # every hand-fitted number the stage reads at boot. Missing
