@@ -687,11 +687,23 @@ if (MODE === "overlay") {
   document.documentElement.style.background = "transparent";
   document.body.style.background = "transparent";
 }
-// THE HUD (Task 20): the glass floats over the REAL desktop and the
-// hands drive the REAL pointer. Only meaningful paired with mode=overlay
-// — hud=1 alone (no overlay) is a no-op, since the HUD's whole point is
-// showing the desktop through a transparent board.
-const HUD_MODE = MODE === "overlay" && Q.get("hud") === "1";
+// THE HUD (Task 20): the hands drive the REAL pointer.
+//
+// Task 22 ungated this from mode=overlay. The original pairing assumed
+// the only reason to drive the real pointer was seeing the desktop
+// through a transparent board — but Chrome on this machine will not give
+// a per-pixel transparent window at all (tested with and without
+// --enable-transparent-visuals, with and without the GPU: always opaque
+// white), so overlay mode cannot deliver that, and gating the pointer
+// behind it made real-pointer control unreachable in the one mode that
+// does work. The user's actual ask was to control the machine from the
+// mirror view itself ("i liked how the mirror screen felt and i want to
+// control in that itself"), which is exactly mode=mirror + hud=1: you
+// see yourself and your hands, and the pointer follows your fingertip on
+// the real desktop underneath. The overlay-only CSS (the ghost mirror at
+// body.hud.overlay #cam) still keys off both classes, so mirror mode is
+// unaffected by it — the camera is already the background there.
+const HUD_MODE = Q.get("hud") === "1";
 if (HUD_MODE) document.body.classList.add("hud");
 // THE MIRROR DIAL: how much of the camera shows behind the glass in HUD
 // mode. Starts at tuning hud.mirror; M cycles it live so the feel can be
@@ -2388,7 +2400,7 @@ function stageDesk(xid, title) {
   // longer than the fade-in, and it never asserts something unverified.
   el.innerHTML = `<div class="bar"><h3>${escT(title || "DESKTOP")}</h3>` +
                  `<span class="badge">…</span>` +
-                 `<span class="refresh" style="display:none">refresh</span></div>` +
+                 `<span class="refresh" style="display:none">bring here</span></div>` +
                  `<div class="body"><img alt=""><div class="nolook-msg">no live view yet</div></div>`;
   BEHIND.appendChild(el);
   const it = { el, id: UID++, type: "desk", pinned: false, badge: null,
@@ -2545,12 +2557,15 @@ function desksApplyBadge(it) {
     it.el.classList.remove("nolook");
     if (rEl) rEl.style.display = "none";
   } else if (b.state === "none") {
-    bEl.textContent = "HIDDEN · no view yet"; bEl.className = "badge none";
+    // Task 22: "OFF-SCREEN" not "HIDDEN" — the window isn't hidden from
+    // the board, it's unmapped by i3 because its workspace isn't showing,
+    // and "bring here" is the one-tap fix (see deskBring).
+    bEl.textContent = "OFF-SCREEN · tap to bring"; bEl.className = "badge none";
     it.el.classList.add("nolook");
     if (rEl) rEl.style.display = "";
   } else {
     const ms = b.ageMs + Math.max(0, performance.now() - b.syncedAt);
-    bEl.textContent = "HIDDEN · " + humanAge(ms) + " ago"; bEl.className = "badge hidden";
+    bEl.textContent = "OFF-SCREEN · " + humanAge(ms) + " ago"; bEl.className = "badge hidden";
     it.el.classList.remove("nolook");
     if (rEl) rEl.style.display = "";
   }
@@ -2617,6 +2632,34 @@ async function deskPeek(it) {
       body: JSON.stringify({ a: "peek", xid: it.def.xid }) });
   } catch (e) {}
   desksHealthCheck();   // pick up the fresh cache age now, not on the next 4s tick
+}
+
+// BRING IT BEHIND THE GLASS (Task 22) — what the refresh tap does now,
+// and a much better deal than peek. peek could only ever borrow ONE frame
+// of a hidden window, at the cost of a visible flicker, and the card went
+// stale again immediately. bring moves that window onto the BOARD's own
+// workspace, where the glass floats over it: it stays mapped, so it
+// streams genuinely live from then on, with no flicker and nothing to
+// re-tap. (Measured: a terminal covered by the glass streamed 45 distinct
+// frames in 5s.) Falls back to peek when the server can't see a board
+// window to bring things to — e.g. the page is open in a normal tab whose
+// title isn't "jarvis", so there is no boardWs.
+async function deskBring(it) {
+  if (!it || !it.def || it.def.xid == null) return;
+  const board = DESKS && DESKS.boardWs;
+  if (board == null) return deskPeek(it);
+  const name = (it.def.title || "that window").slice(0, 28);
+  toast(`bringing ${name} behind the glass — it goes live`, 2200);
+  try {
+    const r = await fetch("/desks/cmd", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: "bring", xid: it.def.xid }) });
+    if (!r.ok) { toast("could not move that window", 1800); return; }
+  } catch (e) { return; }
+  // the window needs a moment to be remapped and repaint before the next
+  // capture is worth anything; refresh DESKS (and so the badge) after it
+  await new Promise(r => setTimeout(r, 350));
+  desksHealthCheck();
 }
 
 // minimal safe markdown-ish render: escape all HTML, then style headers/bold
@@ -3648,7 +3691,7 @@ function endGrab(c, i, cur) {
         const onRefresh = rR && cur.x >= rR.left && cur.x <= rR.right &&
                           cur.y >= rR.top && cur.y <= rR.bottom;
         if (onRefresh) {
-          deskPeek(c);
+          deskBring(c);   // Task 22: bring it live for good, not one peeked frame
         } else {
           const tapNow = performance.now();
           if (tapNow - (c._lastBarTap || 0) < 400) {

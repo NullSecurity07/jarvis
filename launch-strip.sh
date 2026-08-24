@@ -37,14 +37,14 @@ fi
 curl -s -m 1 "http://127.0.0.1:$PORT/config" >/dev/null || fail "server did not come up on :$PORT — see launcher.log"
 say "server is up on :$PORT"
 
-if pgrep -f "user-data-dir=$HOME/.local/share/jarvis/chrome" >/dev/null 2>&1; then
-  say "NOTE: a jarvis Chrome window is already open on this profile. A second"
-  say "window inherits the first process's flags, so close the other board"
-  say "first if the strip misbehaves."
-fi
-
-URL="http://127.0.0.1:$PORT/stage.html?res=1280x720&hud=1&strip=1"
 PROFILE="$HOME/.local/share/jarvis/chrome"
+# ONE PROCESS PER PROFILE, enforced (see bin/profile-guard.sh for the
+# measured reason: a second window on a busy profile loses the GPU
+# delegate and runs the models 4-6x slower).
+. "$(dirname "$(readlink -f "$0")")/bin/profile-guard.sh"
+board_profile_require_free "$PROFILE" "launch-strip"
+
+URL="http://127.0.0.1:$PORT/stage.html?mode=mirror&hud=1&res=1280x720"
 mkdir -p "$PROFILE"
 say "opening the strip (${W}x${H} at ${X},${Y})…"
 google-chrome-stable \

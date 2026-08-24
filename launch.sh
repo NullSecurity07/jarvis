@@ -29,6 +29,11 @@ fi
 # takes the board down with it. (First launch asks for the camera once.)
 PROFILE="$HOME/.local/share/jarvis/chrome"
 mkdir -p "$PROFILE"
+# ONE PROCESS PER PROFILE, enforced (see bin/profile-guard.sh for the
+# measured reason: a second window on a busy profile loses the GPU
+# delegate and runs the models 4-6x slower).
+. "$(dirname "$(readlink -f "$0")")/bin/profile-guard.sh"
+board_profile_require_free "$PROFILE" "launch"
 exec google-chrome-stable \
   --user-data-dir="$PROFILE" \
   --disable-backgrounding-occluded-windows \

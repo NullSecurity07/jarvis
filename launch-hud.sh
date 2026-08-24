@@ -51,14 +51,11 @@ fi
 # process already running under it.
 PROFILE="$HOME/.local/share/jarvis/chrome"
 mkdir -p "$PROFILE"
-if pgrep -f -- "--user-data-dir=$PROFILE" >/dev/null 2>&1; then
-  say "NOTE: a Chrome process is already running under this profile (the"
-  say "      plain board from launch.sh?). Chrome flags — INCLUDING THE"
-  say "      TRANSPARENCY FLAG — only land on a genuinely NEW process; a"
-  say "      second --app window under an already-running profile just"
-  say "      opens inside it and would come out OPAQUE. Close that Chrome"
-  say "      window first, then re-run this launcher."
-fi
+# ONE PROCESS PER PROFILE, enforced (see bin/profile-guard.sh for the
+# measured reason: a second window on a busy profile loses the GPU
+# delegate and runs the models 4-6x slower).
+. "$(dirname "$(readlink -f "$0")")/bin/profile-guard.sh"
+board_profile_require_free "$PROFILE" "launch-hud"
 
 say "opening the HUD…"
 google-chrome-stable \
