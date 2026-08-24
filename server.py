@@ -562,7 +562,14 @@ def _desks_snapshot():
             cls = props.get("class") or ""
             title = n.get("name") or ""
             cls_l = cls.lower()
-            is_board = cls_l in _DESK_BROWSER_CLASS and "jarvis" in title.lower()
+            # Task 22: also recognise our own launchers' WM_CLASS. The
+            # browser-class + "jarvis" in title rule missed a board opened
+            # with --class=jarvis-strip (launch-strip.sh sets one so i3
+            # rules can target the panel), which silently left boardWs
+            # None — and boardWs None is what `bring` needs, so the whole
+            # bring-it-behind-the-glass path was dead in strip mode.
+            is_board = ((cls_l in _DESK_BROWSER_CLASS and "jarvis" in title.lower())
+                        or cls_l.startswith("jarvis"))
             if is_board and board_ws is None:
                 board_ws = ws_num
             if not is_board and cls_l not in _DESK_EXCLUDE_CLASS:
@@ -1437,7 +1444,21 @@ class Handler(SimpleHTTPRequestHandler):
                             raise ValueError("board workspace unknown")
                     else:
                         dest = cmd.get("n")
-                        if not _desks_valid_ws_ref(dest, snap):
+                        # A NUMBER may name a workspace that doesn't exist
+                        # yet, and must: an i3 workspace ceases to exist
+                        # the moment its last window leaves, so "bring
+                        # this here" then "send it back where it came
+                        # from" would fail on the way back for exactly
+                        # the windows you just moved. i3 creates a
+                        # numbered workspace on demand, so allow 1..99
+                        # rather than requiring it to be in the live
+                        # tree. A NAME still has to already exist —
+                        # unconstrained strings are not something to hand
+                        # to a window manager.
+                        n = _desks_int(dest)
+                        if n is not None and 1 <= n <= 99:
+                            dest = n
+                        elif not _desks_valid_ws_ref(dest, snap):
                             raise ValueError("unknown workspace")
                     ref = ["number", str(dest)] if isinstance(dest, int) else [str(dest)]
                     _i3(f"[con_id={win['cid']}]", "move", "container",
