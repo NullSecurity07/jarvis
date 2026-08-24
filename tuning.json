@@ -144,5 +144,18 @@
   "hud": {
     "_": "THE HUD (glass over the real desktop). mirror = how much of the camera self-view shows behind the glass, 0..1 \u2014 0 is pure see-through, 1 is the old full mirror. M cycles it live in HUD mode and the choice is remembered per browser.",
     "mirror": 0.35
+  },
+  "pointer": {
+    "_": "THE POINTER FEEL (Task 28). zone = the fraction of the camera frame that maps to the WHOLE screen; 0.62 means the middle 62% covers everything, so the hand travels ~1.6x less and the screen corners are actually reachable (1.0 = the old 1:1 mapping, where the edges could not be reached at all). lerp = pointer smoothing, separate from hands.cursorLerp because the calm smoothing that suits dragging cards reads as lag on a mouse; higher is more responsive. deadPx = ignore moves smaller than this many pixels. gesture = the mouse chord: tapIn/tapOut are thumb-to-fingertip distances in span units (hysteresis), holdMs is how long contact must last to become a drag instead of a click, doubleMs is the window two taps must fall inside for the app to see a double, scrollPxPerClick is hand travel per wheel click.",
+    "zone": 0.62,
+    "lerp": 0.75,
+    "deadPx": 0.6,
+    "gesture": {
+      "tapIn": 0.45,
+      "tapOut": 0.62,
+      "holdMs": 320,
+      "doubleMs": 400,
+      "scrollPxPerClick": 38
+    }
   }
 }

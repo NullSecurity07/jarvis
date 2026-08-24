@@ -272,10 +272,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      source was being downscaled to 640x360 on top of that. Full-res
      capture plus a bigger card makes text legible; stretch it further by
      hand when you need to. */
-  .panel.desk { width:1000px; height:620px; }
+  /* Task 28: 16:9 by default and then matched to the real frame's aspect
+     the moment one arrives (see deskFitAspect) — the card was letterboxing
+     and the source was smaller than the card, so it sat pillarboxed in the
+     middle at its natural size instead of filling. */
+  .panel.desk { width:1120px; height:666px; }
   .panel.desk .body { display:flex; align-items:center; justify-content:center;
                       padding:0; overflow:hidden; background:#04100e; position:relative; }
-  .panel.desk .body img { display:block; max-width:100%; max-height:100%; }
+  /* fills the body exactly — the CARD is sized to the frame's aspect, so
+     filling cannot distort, and the img's box stays equal to the displayed
+     pixels, which is what deskPointAt's mapping depends on */
+  .panel.desk .body img { display:block; width:100%; height:100%; }
   /* THE DESKS TELL THE TRUTH (Task 19): every card says exactly what it's
      showing — never a bare pixel stream the viewer has to trust blind. */
   .panel.desk .bar h3 { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
@@ -602,6 +609,12 @@ function hudBadge() { return document.getElementById("hudbadge"); }
 function hudSetArmed(v) {
   if (HUD.armed === v) return;
   HUD.armed = v;
+  // A DRAG MUST NEVER OUTLIVE CONTROL. Disarming, the lock closing, or a
+  // hand leaving the frame while a button is held would otherwise leave
+  // that button down on the real desktop with no gesture left to release
+  // it — every subsequent move becomes a drag and the user has to reach
+  // for the physical mouse to escape.
+  if (!v) ptrReleaseAll("disarmed");
   const b = hudBadge();
   if (b) {
     b.textContent = v ? "POINTER ARMED — make a FIST to release (or Esc / A)"
@@ -695,6 +708,131 @@ async function deskClick(hit, button) {
   } catch (e) {}
 }
 
+// ---- THE HAND IS A MOUSE (Task 28) --------------------------------
+// The user, after the first real try: "make a different clicking in
+// pointer mode (not pinch) and let there me left click, right click,
+// double click (both), scroll and middle click gesture like a full mouse
+// basically".
+//
+// Pinch is deliberately NOT a button. It already means "grab this card"
+// everywhere else on the glass, and overloading it was the crude part.
+// Instead the THUMB is the button bar and the other fingers are the
+// buttons — thumb touches middle = left, ring = right, pinky = middle,
+// which is a real chord your hand can make without looking:
+//
+//   move          index out, hand moves            cursor follows the tip
+//   LEFT click    thumb taps MIDDLE fingertip
+//   RIGHT click   thumb taps RING fingertip
+//   MIDDLE click  thumb taps PINKY fingertip
+//   double click  two left taps inside doubleMs    (both buttons double)
+//   drag          hold thumb on middle             press ... release
+//   SCROLL        index+middle out (a "peace"), move the hand up/down
+//
+// Every tap is measured thumb-tip to finger-tip in SPAN units (the
+// wrist-to-middle-knuckle distance), so it is invariant to how far from
+// the camera the hand is. A tap needs the contact to BREAK again before
+// it counts, which is what separates a tap from a hold, and a hold is
+// what makes drag possible at all.
+const PTR_G = {
+  tapIn: 0.45, tapOut: 0.62,   // hysteresis, in span units
+  holdMs: 320,                 // contact longer than this = drag, not click
+  doubleMs: 400,               // two taps inside this = the app sees a double
+  scrollPxPerClick: 38,        // hand travel per wheel click
+};
+const PTR_FINGER = { 12: 1, 16: 3, 20: 2 };   // fingertip -> X11 button
+
+async function ptrSend(body) {
+  try {
+    await fetch("/pointer", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) });
+  } catch (e) {}
+}
+
+// One hand, one frame. Runs only while the pointer is armed and only for
+// the owner's driving hand — the same gate every other pointer send uses.
+function ptrMouseTick(cur, lms, span, extArr, now) {
+  if (!PTR_CFG || !PTR_CFG.click || !span) { cur.ptrBtn = null; return; }
+  const g = { ...PTR_G, ...((TUNE.pointer && TUNE.pointer.gesture) || {}) };
+  const th = lms[4];
+  cur.ptrTap = cur.ptrTap || {};
+
+  // ---- SCROLL: index + middle out, ring + pinky folded, hand moves
+  const peace = extArr[0] && extArr[1] && !extArr[2] && !extArr[3];
+  if (peace) {
+    if (cur.scrollY0 == null) cur.scrollY0 = cur.y;
+    const dy = cur.y - cur.scrollY0;
+    const steps = Math.trunc(dy / g.scrollPxPerClick);
+    if (steps !== 0) {
+      cur.scrollY0 += steps * g.scrollPxPerClick;
+      // wheel up when the hand rises (dy negative), like a real wheel
+      const button = steps < 0 ? 4 : 5;
+      for (let k = 0; k < Math.min(5, Math.abs(steps)); k++)
+        ptrSend({ a: "click", button, action: "click" });
+    }
+    // a scrolling hand is not a clicking hand: drop any held button
+    if (cur.ptrBtn) { ptrSend({ a: "click", button: cur.ptrBtn, action: "release" }); cur.ptrBtn = null; }
+    return;
+  }
+  cur.scrollY0 = null;
+
+  // ---- BUTTONS: thumb against middle / ring / pinky
+  let nearTip = null, nearD = 9;
+  for (const t of [12, 16, 20]) {
+    const d = Math.hypot(th.x - lms[t].x, th.y - lms[t].y) / span;
+    if (d < nearD) { nearD = d; nearTip = t; }
+  }
+  const contact = cur.ptrContact
+    ? nearD < g.tapOut          // already touching: hold until it clearly opens
+    : nearD < g.tapIn;          // not touching: needs a firm contact to start
+
+  if (contact && !cur.ptrContact) {          // contact begins
+    cur.ptrContact = nearTip;
+    cur.ptrContactT = now;
+    cur.ptrDragged = false;
+  } else if (contact && cur.ptrContact) {    // contact continues
+    if (!cur.ptrBtn && !cur.ptrDragged && now - cur.ptrContactT > g.holdMs) {
+      cur.ptrBtn = PTR_FINGER[cur.ptrContact] || 1;   // becomes a DRAG
+      cur.ptrDragged = true;
+      ptrSend({ a: "click", button: cur.ptrBtn, action: "press" });
+      toast("drag", 700);
+    }
+  } else if (!contact && cur.ptrContact) {   // contact breaks
+    const tip = cur.ptrContact, held = now - cur.ptrContactT;
+    cur.ptrContact = null;
+    if (cur.ptrBtn) {                        // end of a drag
+      ptrSend({ a: "click", button: cur.ptrBtn, action: "release" });
+      cur.ptrBtn = null;
+    } else if (held <= g.holdMs) {           // a tap = a click
+      const button = PTR_FINGER[tip] || 1;
+      ptrSend({ a: "click", button, action: "click" });
+      // A DOUBLE IS TWO SINGLES, on purpose: X11 has no "double click"
+      // event — every application decides for itself from the gap between
+      // two presses. Sending two real clicks inside its own threshold is
+      // exactly what a physical mouse does, and it works for whatever the
+      // app's threshold happens to be.
+      const prev = cur.ptrTap[button] || 0;
+      cur.ptrTap[button] = now;
+      const dbl = now - prev < g.doubleMs;
+      foley.grab();
+      toast(dbl ? (button === 3 ? "right double" : "double click")
+                : (button === 1 ? "left click" : button === 3 ? "right click" : "middle click"), 700);
+    }
+  }
+}
+
+// Give a held button back whenever control ends, so a drag can never be
+// left stuck down because a hand left the frame or the lock closed.
+function ptrReleaseAll(why) {
+  for (const k of Object.keys(cursors)) {
+    const c = cursors[k];
+    if (c && c.ptrBtn) {
+      ptrSend({ a: "click", button: c.ptrBtn, action: "release" });
+      c.ptrBtn = null; c.ptrContact = null;
+    }
+  }
+}
+
 function hudPointerTick(now) {
   // THE POINTER LAW, literally: unlocked verdict required — no verdict
   // yet (still booting) counts as locked, fail-closed, on purpose.
@@ -719,16 +857,55 @@ function hudPointerTick(now) {
   // not assumed, so a decorated window still maps correctly.
   const offX = (window.screenX || 0) + (window.outerWidth - window.innerWidth) / 2;
   const offY = (window.screenY || 0) + (window.outerHeight - window.innerHeight);
-  const px0 = cur.tipX == null ? cur.x : cur.tipX;   // the index tip drives
-  const py0 = cur.tipY == null ? cur.y : cur.tipY;
+  // SENSITIVITY (Task 28). The user: "the pointer system is very crude
+  // the tracking isnt proper, too less sensitive".
+  //
+  // The mapping was the camera frame 1:1 onto the screen, and that is the
+  // problem: nobody can comfortably sweep their hand across the FULL
+  // frame, so in practice a real hand only ever covered the middle of it.
+  // The screen edges were literally unreachable and every small movement
+  // was scaled down. `pointer.zone` is the fraction of the frame that
+  // maps to the whole screen (0.62 => the middle 62% covers everything,
+  // so the hand moves ~1.6x less for the same cursor travel and the
+  // corners are reachable). 1.0 restores the old 1:1 behaviour.
+  //
+  // Smoothing is separate from the glass cursor's: the board's own lerp
+  // is tuned for calm card handling, which reads as lag on a mouse.
+  const P = (TUNE.pointer || {});
+  const zone = Math.min(1, Math.max(0.2, P.zone ?? 0.62));
+  const plerp = Math.min(1, Math.max(0.15, P.lerp ?? 0.75));
+  const rawX = cur.tipX == null ? cur.x : cur.tipX;   // the index tip drives
+  const rawY = cur.tipY == null ? cur.y : cur.tipY;
+  const zx = Math.min(1, Math.max(0, (rawX / innerWidth - 0.5) / zone + 0.5));
+  const zy = Math.min(1, Math.max(0, (rawY / innerHeight - 0.5) / zone + 0.5));
+  const tX = zx * innerWidth, tY = zy * innerHeight;
+  cur.ptrX = cur.ptrX == null ? tX : cur.ptrX + (tX - cur.ptrX) * plerp;
+  cur.ptrY = cur.ptrY == null ? tY : cur.ptrY + (tY - cur.ptrY) * plerp;
+  const px0 = cur.ptrX, py0 = cur.ptrY;
   // Over a live desk card, the pointer goes where you are pointing INSIDE
   // that window — which is generally nowhere near where your finger is on
   // the glass, and is the whole point: the card is a remote control for a
   // window that may be anywhere, including behind this very board.
   const hit = deskPointAt(px0, py0);
+  // A card whose window is off-screen cannot be driven (deskPointAt
+  // refuses it) — and silently doing nothing is exactly what made the
+  // first real attempt feel broken: the card was showing a frozen frame
+  // of a window on another workspace, so aiming at it did nothing and
+  // said nothing. Say it once, with the fix.
+  if (!hit) {
+    const over = items.find(it => it.type === "desk" && it.el &&
+      (() => { const im = it.el.querySelector(".body img");
+               if (!im) return false;
+               const r = im.getBoundingClientRect();
+               return px0 >= r.left && px0 <= r.right && py0 >= r.top && py0 <= r.bottom; })());
+    if (over && now - (HUD.deadHintT || 0) > 4000) {
+      HUD.deadHintT = now;
+      toast("that window is off-screen — tap “bring here” on the card first", 2600);
+    }
+  }
   // Say which card is live under the finger. Without this the difference
   // between "pointing at the glass" and "driving that app" is invisible
-  // until you pinch and something happens somewhere else.
+  // until you click and something happens somewhere else.
   if (HUD.overDesk !== (hit ? hit.it.id : null)) {
     HUD.overDesk = hit ? hit.it.id : null;
     for (const it of items)
@@ -739,7 +916,7 @@ function hudPointerTick(now) {
   const sy = hit ? hit.sy : Math.round(py0 + offY);
   const dx = HUD.lastSend.x == null ? 999 : sx - HUD.lastSend.x;
   const dy = HUD.lastSend.y == null ? 999 : sy - HUD.lastSend.y;
-  if (Math.hypot(dx, dy) < 1.5) return;
+  if (Math.hypot(dx, dy) < (P.deadPx ?? 0.6)) return;
   HUD.lastSend = { t: now, x: sx, y: sy };
   fetch("/pointer", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ a: "move", x: sx, y: sy }) }).catch(() => {});
@@ -2539,6 +2716,15 @@ function stageDesk(xid, title) {
   // Retry with backoff a few times, then say so instead of staying
   // silently blank forever.
   const img = el.querySelector("img");
+  // THE CARD WEARS THE WINDOW'S SHAPE (Task 28). The user: "look at the
+  // size still let it be 16:9 ratio". The card was a fixed rectangle and
+  // the frame kept its own aspect inside it, so a card either letterboxed
+  // (bars top and bottom) or — because the downscaled frame was SMALLER
+  // than the card and img was max-width, not width — sat pillarboxed in
+  // the middle at natural size. Matching the card to the frame's real
+  // aspect removes every bar, and it keeps deskPointAt exact: the image
+  // fills the body, so the img's box IS the displayed pixels.
+  img.addEventListener("load", () => deskFitAspect(it, img), { passive: true });
   let deskRetries = 0;
   img.onerror = () => {
     if (!img.isConnected) return;
@@ -2554,6 +2740,32 @@ function stageDesk(xid, title) {
   retileDesks();
   desksHealthCheck();   // Task 19: badge lands right away, not on the next 4s tick
   return it;
+}
+
+// Resize a desk card so its BODY has exactly the frame's aspect ratio.
+// Width is kept (it is what the user sizes by hand); height follows. The
+// bar's height is measured rather than assumed, so a themed or wrapped
+// title cannot put the mapping out by a few pixels.
+function deskFitAspect(it, img) {
+  const nw = img.naturalWidth, nh = img.naturalHeight;
+  if (!nw || !nh || !it.el) return;
+  // An <img> fed by multipart/x-mixed-replace fires `load` for EVERY
+  // frame, so this runs ~10x a second per card. Everything below forces
+  // synchronous layout (getComputedStyle + getBoundingClientRect), which
+  // is exactly the per-frame forced-reflow trap a previous round already
+  // had to fix once. The frame's size only changes when the window is
+  // resized, so do the work only then.
+  if (it._fitW === nw && it._fitH === nh) return;
+  it._fitW = nw; it._fitH = nh;
+  const bar = it.el.querySelector(".bar");
+  const barH = bar ? bar.getBoundingClientRect().height / (it.scale || 1) : 0;
+  const w = parseFloat(getComputedStyle(it.el).width) || 0;
+  if (!w) return;
+  const want = Math.round(w * nh / nw + barH);
+  if (Math.abs((parseFloat(it.el.style.height) || 0) - want) > 1) {
+    it.el.style.height = want + "px";
+    if (typeof retileDesks === "function") retileDesks();
+  }
 }
 
 // THE DESKS (fix round 1): the user's headline ask was "see multiple
@@ -3652,10 +3864,15 @@ function hitTest(cur) {
 // (POINT to take the mouse, FIST to give it back) instead of inventing a
 // third hand shape to mean "no really, click".
 function grabOrClick(cur, i) {
-  if (HUD_MODE && HUD.armed && cur.role === "owner" && PTR_CFG && PTR_CFG.click) {
+  // Task 28: pinch is no longer a click. The user asked for "a different
+  // clicking in pointer mode (not pinch)" — clicking is the thumb-to-
+  // finger chord in ptrMouseTick now. What pinch still does while ARMED
+  // is nothing at all on a desk card: grabbing the card out from under a
+  // cursor you are actively driving is never what you meant.
+  if (HUD_MODE && HUD.armed && cur.role === "owner") {
     const hit = deskPointAt(cur.tipX == null ? cur.x : cur.tipX,
                             cur.tipY == null ? cur.y : cur.tipY);
-    if (hit) { deskClick(hit, 1); foley.grab(); return; }
+    if (hit) return;
   }
   const c = hitTest(cur);
   if (c && c.grabbedBy.length < 2 && !c.grabbedBy.includes(i)) beginGrab(c, i, cur);
@@ -5108,6 +5325,12 @@ async function boot() {
         // or disarms pointer control. See hudGestureTick's comment for
         // why this shape and not any gesture already in the vocabulary.
         if (HUD_MODE && cur.role === "owner") hudGestureTick(cur, extArr, now);
+        // THE HAND IS A MOUSE (Task 28) — only while armed, only the
+        // owner, same gate as every other pointer send.
+        if (HUD_MODE && HUD.armed && cur.role === "owner")
+          ptrMouseTick(cur, lms, span, extArr, now);
+        else if (cur.ptrBtn || cur.ptrContact) { cur.ptrContact = null;
+          if (cur.ptrBtn) { ptrSend({ a: "click", button: cur.ptrBtn, action: "release" }); cur.ptrBtn = null; } }
         // ---- GUEST APPROVAL (owner's hand only): thumbs-up held, or a
         // tap on a candidate's chip; a tap on a guest's chip revokes.
         if (cur.role === "owner" && V.guestCandidates.length + Object.keys(LOCK.approvals).length) {

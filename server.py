@@ -347,24 +347,30 @@ def ptr_click(button, action, rate_hz):
     no way to express "click over there" in one call that could land
     somewhere the user never saw the cursor.
 
-    SCOPE (Task 26). Click exists because controlling a desk on the glass
-    is the whole point of showing it live; the previous rounds' "move
-    only" was staged caution, not a permanent boundary. It stays narrow:
-    buttons 1-3 only (no 4/5 wheel — scrolling has its own gesture on the
-    glass and a stuck wheel is miserable), and `action` is press, release
-    or click. Rate-limited like motion so a stuck gesture cannot machine-
-    gun the desktop. Returns ("clicked"|"dropped"|"error", detail)."""
-    if button not in (1, 2, 3):
-        return "error", "button must be 1, 2 or 3"
+    SCOPE (Task 26, widened in Task 28). Click exists because controlling
+    a desk on the glass is the whole point of showing it live. Buttons
+    1-3 are the real buttons; 4/5 are the wheel, added when the user asked
+    for "a full mouse basically" — an earlier round had excluded the wheel
+    on the grounds that a stuck synthetic wheel is miserable, which is
+    still true, so it is rate-limited like everything else and only ever
+    emitted as discrete click pairs, never held. `action` is press,
+    release or click. Returns ("clicked"|"dropped"|"error", detail)."""
+    if button not in (1, 2, 3, 4, 5):
+        return "error", "button must be 1-3 (buttons) or 4/5 (wheel)"
     if action not in ("press", "release", "click"):
         return "error", "action must be press, release or click"
     with _PTR_LOCK:
         if not _ptr_open():
             return "error", _PTR["err"] or "X11 unavailable"
         now = time.monotonic()
-        if now - _PTR.get("lastClickT", 0) < 1.0 / max(1, min(20, rate_hz)):
+        # the wheel needs a much higher ceiling than the buttons: a scroll
+        # gesture emits a stream of discrete clicks and 8/s would feel
+        # broken, while 8/s is exactly right for guarding real clicks.
+        cap = 60 if button in (4, 5) else max(1, min(20, rate_hz))
+        key = "lastWheelT" if button in (4, 5) else "lastClickT"
+        if now - _PTR.get(key, 0) < 1.0 / cap:
             return "dropped", None
-        _PTR["lastClickT"] = now
+        _PTR[key] = now
         try:
             xt, dp = _PTR["xtst"], _PTR["disp"]
             if action in ("press", "click"):
