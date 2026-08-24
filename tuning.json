@@ -157,5 +157,9 @@
       "doubleMs": 400,
       "scrollPxPerClick": 38
     }
+  },
+  "desks": {
+    "openFull": true,
+    "_": "THE DESKS on the glass. openFull: the first desk card you open goes FULL SCREEN immediately (bar and frame dropped, body sized to the window's own aspect \u2014 on a 1920x1080 display showing a 1920x1044 window that is 1:1, no resampling). Set false to have desks open tiled on the glass instead, at roughly 70% of native. Toggle either way with Z, or bin/board.sh '{\"a\":\"deskfull\"}' \u2014 which is the dependable one, since the board is click-through and this i3 is focus_follows_mouse, so it often has no keyboard focus."
   }
 }

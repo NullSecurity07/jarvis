@@ -2859,7 +2859,14 @@ function deskSetFull(it, on) {
     toast("desk back on the glass", 1200);
     return;
   }
-  const nw = it.natW || 16, nh = it.natH || 9, a = nw / nh;
+  // Read the frame's size from the <img> ITSELF, not from a value cached
+  // earlier: if the first `load` was missed the cache is empty, and a
+  // full screen built on a guessed 16:9 would be the wrong shape for the
+  // window it is supposed to be showing 1:1.
+  const im0 = it.el.querySelector(".body img");
+  const nw = (im0 && im0.naturalWidth) || it.natW || 16;
+  const nh = (im0 && im0.naturalHeight) || it.natH || 9;
+  const a = nw / nh;
   const w = Math.min(innerWidth, innerHeight * a);
   if (body) { body.style.width = Math.round(w) + "px";
               body.style.height = Math.round(w / a) + "px"; }
@@ -2924,6 +2931,21 @@ function deskFitAspect(it, img) {
     }
   }
   it.natW = nw; it.natH = nh;
+
+  // OPENING A DESK OPENS IT (Task 31). The user's goal, unchanged since
+  // they first described it: "when i click desks option and open a desk
+  // that i should be able to real time view and control that". A card
+  // tiled into the grid shows the window at ~70% of native and is fiddly
+  // to reach the full-screen toggle for — Z needs keyboard focus the
+  // board does not reliably have (click-through + focus_follows_mouse).
+  // So the first desk you open goes full screen by itself. A second card
+  // does not: staging two means you want to see them side by side.
+  const others = items.filter(i => i.type === "desk" && i !== it && i.el);
+  if (!it.full && !others.length && !it._autoFulled &&
+      ((TUNE.desks && TUNE.desks.openFull) ?? true)) {
+    it._autoFulled = true;
+    deskSetFull(it, true);
+  }
 }
 
 // THE DESKS (fix round 1): the user's headline ask was "see multiple
@@ -6385,7 +6407,12 @@ function pushState(now) {
                      b ? b.clientWidth : 0, b ? b.clientHeight : 0,
                      it.natW || 0, it.natH || 0,
                      Math.round((it.scale || 1) * 100) / 100,
-                     window.__gridDbg || null];
+                     { grid: window.__gridDbg || null, full: !!it.full,
+                       vw: innerWidth, vh: innerHeight,
+                       imgW: (() => { const im = it.el.querySelector(".body img");
+                                      return im ? Math.round(im.getBoundingClientRect().width) : 0; })(),
+                       imgH: (() => { const im = it.el.querySelector(".body img");
+                                      return im ? Math.round(im.getBoundingClientRect().height) : 0; })() }];
            })() },
     faces: FACES ? FACES.list().filter(f => f.seenNow).map(f => ({
       id: f.id, role: (LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "unknown",
