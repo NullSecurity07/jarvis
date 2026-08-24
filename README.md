@@ -10,16 +10,18 @@ Runs on a webcam, Chrome, and stdlib Python. Hand tracking by [Google MediaPipe]
 ./launch.sh
 ```
 
-That is the only launcher, on purpose. It starts `server.py` if it isn't up, then opens the board as a **small mirror panel**: you see yourself, your hands and the ring; it sticks to the corner of every workspace; it never covers what you are working on. Your hands drive the real mouse from inside it, and live views of your own windows can be staged on the glass.
+That is the only launcher, on purpose. It starts `server.py` if it isn't up, then opens the board **full screen and click-through**: the glass covers the display, your hands drive the real mouse, and every click passes straight through to whatever is underneath. Behind the glass is the camera mirror — **M** dials it from full strength down to off, so you choose how much of yourself you see while you work.
 
 | | |
 |---|---|
 | **POINT** (index up, others folded, ~0.7s) | take the mouse |
 | **FIST** | give it back (`Esc` always releases) |
-| **F** | grow the panel to full screen, and back |
-| **M** | mirror brightness · **D** debug overlay |
+| **M** | mirror: full → 60% → 35% → 20% → off |
+| **D** | debug overlay |
 
-Size lives in `jarvis.json` under `panel` (`w`, `h`, `gap`), or `JARVIS_W/H/GAP` for one launch. Run it again while it's open and it just focuses the panel instead of opening a second one.
+Run it again while it's open and it just focuses the board instead of opening a second one.
+
+**Click-through is not a detail** — it is what makes controlling anything possible. The board is opaque and on top, so a synthetic click at screen coordinates would otherwise land on the board itself. `tools/clickthrough.py` empties the window's X input shape, so events pass through while the glass keeps compositing above them. The launcher **refuses to leave the board up** if that fails, rather than handing you a full-screen window that swallows every click.
 
 Manual: `python3 server.py`, then open **http://127.0.0.1:8794/stage.html?mode=mirror&hud=1** in Chrome. There is also a rofi/dmenu entry (`jarvis.desktop`).
 
@@ -117,7 +119,7 @@ What genuinely cannot be captured is an **unmapped** window: i3 unmaps every win
 
 For a window that really is unmapped, a card shows the **last frame it ever produced**, honestly aged: `LIVE` (green), `OFF-SCREEN · Nm ago` (grey), or `OFF-SCREEN · tap to bring` with an empty glass frame if nothing was ever captured. Tapping that badge **brings the window here** — moves it onto the board's own workspace, where the glass floats over it, so it stays mapped and streams genuinely live from then on. That replaced the old `peek`, which could only borrow a single frame at the cost of a visible flicker and went stale immediately. (`peek` still exists as the fallback when the server cannot see a board window to bring things to.) Missing the `desks` key entirely, or `"enabled": false`, disables the feature completely: every `/desks*` endpoint 404s, and the orb never appears.
 
-**Nothing here ever i3-fullscreens the board** — `F`'s big mode is a floating move+resize to the screen size. A genuinely fullscreen window makes i3 unmap its tiled siblings, which is exactly the windows you were trying to watch. Floating keeps them mapped. Measured through a real board covering a live-updating terminal: 45 distinct frames in 5 seconds, 38 KB/s, of the terminal's own content.
+**Nothing here ever i3-fullscreens the board** — it is a floating move+resize to the screen size. A genuinely fullscreen window makes i3 unmap its tiled siblings, which is exactly the windows you were trying to watch. Floating keeps them mapped. Measured through a real board covering a live-updating terminal: 45 distinct frames in 5 seconds, 38 KB/s, of the terminal's own content.
 
 **Control is limited to i3 commands** — `workspace`, `focus`, `fullscreen`, `peek`, `bring`, `send`, `panel` — sent through a server-side allowlist, never free-form text. The Desks channel itself has no synthetic mouse or keyboard input, and `kill` is not implemented: gesture-driven window control never closes anything for you. (The HUD, below, is a separate feature — a real synthetic pointer, deliberately scoped to move-only, gated by the owner lock, and off unless you turn it on.) The general `move` verb still isn't in the allowlist, and `layout` isn't either — `layout` acts on whatever happens to be focused rather than a named container, with no undo from the board. `bring` and `send` are the narrow, named slice of `move` that the board actually needs, and they are scoped so the **destination is never taken from the request**: `bring` always targets the workspace you are currently looking at (the focused one, as the server itself observed it — the panel is sticky, so its own nominal workspace would be meaningless), and `send` takes a workspace number, which i3 will create if it has to, or a name that must already exist. `panel` only ever resizes the board's own window, the one the server identified. The caller chooses which window moves, never where it can end up. `peek` (above) is the sole exception carved out for refreshing a hidden window, and it's scoped tightly: it only switches to and back from the one workspace the requested window is already on. Desk cards are their own item type, deliberately flat and un-relief'd — a live desktop rendered as an embossed 3D scene would be unreadable, unlike a staged still image.
 
@@ -141,7 +143,13 @@ There is no separate transparent full-screen mode, and there cannot be one here:
 
 `enabled: false` (or the key missing entirely) makes `POST /pointer` 404 — the HUD page still opens, but hands only hover, nothing moves. `rateHz` caps how often the server will actually move the pointer (dropped, never queued, so the cursor can't lag behind in a backlog); the page throttles its own sends to the same number.
 
-**Scope, this round: FOLLOW ONLY.** No click, no scroll, no drag, no keyboard — `POST /pointer` accepts `{"a":"move",...}` and refuses everything else with a 400. Clicking is a deliberate later step, once the tracking itself feels right.
+**Scope: move and click.** `POST /pointer` accepts `{"a":"move",x,y}` and `{"a":"click",button,action}`; scroll, drag and keyboard are still refused with a 400. Click arrived because controlling a desk on the glass is the point of showing it live — the earlier move-only limit was staged caution, not a permanent boundary. It stays narrow: buttons 1-3 only (no wheel — scrolling has its own gesture on the glass, and a stuck synthetic wheel is miserable), `action` is `press`/`release`/`click`, and it is rate-limited by `pointer.clickHz` (default 8/s) so a stuck gesture cannot machine-gun the desktop. A click always happens at the pointer's **current** position — the caller moves first — so no single call means "click over there" at coordinates you never saw the cursor reach. Set `"click": false` in `jarvis.json`'s `pointer` block to go back to look-but-don't-touch.
+
+### Controlling a desk
+
+Stage a window as a live card (Desks orb → tap a window). Then **POINT** to arm: the card you are aiming at glows amber, and your fingertip drives *that application's* real cursor — the card is a remote control for a window that may be anywhere, including behind the board. **Pinch to click** inside it. Make a **fist** to disarm, and pinch goes back to meaning "grab this card and move it around the glass". One state decides which of the two a pinch means, so there is no third hand shape to learn.
+
+The mapping is exact: a desk card's `<img>` is `max-width`/`max-height` with no `object-fit`, centred by flex, so its bounding box *is* the displayed pixels — letterboxing included — and it is read post-transform, so a scaled or rotated card still maps correctly. Only a card whose window is currently **capturable** can be driven: an unmapped window is showing a frozen last frame, and clicking where something used to be is worse than not clicking at all.
 
 **The pointer law.**
 - Pointer control **starts disarmed**, every time, no exceptions. While disarmed, nothing is ever sent to `/pointer`.

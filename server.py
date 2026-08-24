@@ -286,9 +286,17 @@ def _ptr_open():
         x11.XDisplayHeight.restype = ctypes.c_int
         x11.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
         x11.XFlush.argtypes = [ctypes.c_void_p]
+        xtst.XTestFakeMotionEvent.restype = ctypes.c_int
         xtst.XTestFakeMotionEvent.argtypes = [
             ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
             ctypes.c_ulong]
+        # Task 26: click. Declared with the same discipline as everything
+        # else here — an undeclared ctypes signature truncates 64-bit
+        # pointers to int and segfaults the process, which this project
+        # has already paid for once.
+        xtst.XTestFakeButtonEvent.restype = ctypes.c_int
+        xtst.XTestFakeButtonEvent.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
         # same DISPLAY/XAUTHORITY fallback the desks feature uses (server
         # is normally launched inside the user's own X session already,
         # so this only matters if it wasn't)
@@ -331,6 +339,42 @@ def ptr_move(x, y, rate_hz):
         except Exception as e:
             return "error", f"XTest call failed: {e}"
         return "moved", None
+
+
+def ptr_click(button, action, rate_hz):
+    """Press/release a real mouse button via XTest at the pointer's
+    CURRENT position — the caller moves first, then clicks, so there is
+    no way to express "click over there" in one call that could land
+    somewhere the user never saw the cursor.
+
+    SCOPE (Task 26). Click exists because controlling a desk on the glass
+    is the whole point of showing it live; the previous rounds' "move
+    only" was staged caution, not a permanent boundary. It stays narrow:
+    buttons 1-3 only (no 4/5 wheel — scrolling has its own gesture on the
+    glass and a stuck wheel is miserable), and `action` is press, release
+    or click. Rate-limited like motion so a stuck gesture cannot machine-
+    gun the desktop. Returns ("clicked"|"dropped"|"error", detail)."""
+    if button not in (1, 2, 3):
+        return "error", "button must be 1, 2 or 3"
+    if action not in ("press", "release", "click"):
+        return "error", "action must be press, release or click"
+    with _PTR_LOCK:
+        if not _ptr_open():
+            return "error", _PTR["err"] or "X11 unavailable"
+        now = time.monotonic()
+        if now - _PTR.get("lastClickT", 0) < 1.0 / max(1, min(20, rate_hz)):
+            return "dropped", None
+        _PTR["lastClickT"] = now
+        try:
+            xt, dp = _PTR["xtst"], _PTR["disp"]
+            if action in ("press", "click"):
+                xt.XTestFakeButtonEvent(dp, button, True, 0)
+            if action in ("release", "click"):
+                xt.XTestFakeButtonEvent(dp, button, False, 0)
+            _PTR["x11"].XFlush(dp)
+        except Exception as e:
+            return "error", f"XTest call failed: {e}"
+        return "clicked", None
 
 
 def _jail_resolve(root, rel):
@@ -589,6 +633,11 @@ def _desks_snapshot():
                 capturable = bool(vis_by_num.get(ws_num)) if mapped is None else mapped
                 wins.append({"cid": n.get("id"), "xid": win, "ws": ws_num,
                             "cls": cls, "title": title,
+                            # x/y as well as w/h (Task 26): controlling a
+                            # desk means mapping a point on the CARD to the
+                            # same point inside the real window, which needs
+                            # where that window actually sits on screen.
+                            "x": rect.get("x"), "y": rect.get("y"),
                             "w": rect.get("width"), "h": rect.get("height"),
                             "focused": bool(n.get("focused")),
                             # "visible" = the user can see it on screen
@@ -1496,18 +1545,13 @@ class Handler(SimpleHTTPRequestHandler):
                     # floating stack position it needs to stay on top, so
                     # nothing else is touched here — no focus, no layout.
                 elif a == "panel":
-                    # THE ONE SURFACE, RESIZED (Task 24). The board is a
-                    # small sticky mirror panel by default so it never
-                    # covers your work. "big" grows it to fill the screen
-                    # for a moment — reading a document on the glass,
-                    # working with live desk cards — and "panel" puts it
-                    # back. Bound to F in the page.
-                    #
-                    # Deliberately a floating move+resize, NEVER i3's
-                    # `fullscreen enable`: a fullscreen window makes i3
-                    # UNMAP its tiled siblings, which is precisely the
-                    # windows whose live frames the big view exists to
-                    # show. Floating leaves them mapped and streaming.
+                    # SIZE THE BOARD TO THE SCREEN (Task 24, narrowed by
+                    # Task 26). Deliberately a floating move+resize, NEVER
+                    # i3's `fullscreen enable`: a fullscreen window makes
+                    # i3 UNMAP its tiled siblings, which is precisely the
+                    # windows whose live frames the glass exists to show.
+                    # Floating covers the screen and leaves them mapped
+                    # and streaming.
                     #
                     # It only ever moves the board's OWN window, the one
                     # the server identified itself — the request cannot
@@ -1515,37 +1559,14 @@ class Handler(SimpleHTTPRequestHandler):
                     bxid = snap.get("boardXid")
                     if not bxid:
                         raise ValueError("no board window to resize")
-                    mode = cmd.get("mode")
-                    if mode not in ("panel", "big", "toggle"):
-                        raise ValueError("bad mode")
+                    # FULL SCREEN, ALWAYS (Task 26). The small-panel size
+                    # and the F toggle are gone at the user's request:
+                    # "remove the full screen and small screen mode, keep
+                    # it full screen". One surface, one size.
                     sw, sh = snap.get("screen") or [1920, 1080]
-                    d = config().get("panel", {})
-                    pw = max(200, min(sw, int(d.get("w", 620))))
-                    ph = max(150, min(sh, int(d.get("h", 460))))
-                    gap = max(0, int(d.get("gap", 16)))
-                    if mode == "toggle":
-                        # Decide from the window's ACTUAL width, not a
-                        # remembered flag: the truth survives a server
-                        # restart and reflects the user having resized it
-                        # by hand. Anything past ~70% of the screen counts
-                        # as already big.
-                        cw = 0
-                        with _DESK_X_LOCK:
-                            c = _desks_x()
-                            if c is not None:
-                                try:
-                                    cw = c.state(bxid)[1]
-                                except Exception:
-                                    cw = 0
-                        mode = "panel" if cw > sw * 0.7 else "big"
                     _i3(f"[id={bxid}]", "floating", "enable")
-                    if mode == "big":
-                        _i3(f"[id={bxid}]", "resize", "set", str(sw), str(sh))
-                        _i3(f"[id={bxid}]", "move", "position", "0", "0")
-                    else:
-                        _i3(f"[id={bxid}]", "resize", "set", str(pw), str(ph))
-                        _i3(f"[id={bxid}]", "move", "position",
-                            str(max(0, sw - pw - gap)), str(max(0, sh - ph - gap)))
+                    _i3(f"[id={bxid}]", "resize", "set", str(sw), str(sh))
+                    _i3(f"[id={bxid}]", "move", "position", "0", "0")
                 elif a == "peek":
                     # THE DESKS' one way to refresh a HIDDEN window (Task
                     # 19): a window on a non-visible workspace can't be
@@ -1602,9 +1623,28 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception:
                 self._json({"err": "bad json"}, 400)
                 return
-            if req.get("a") != "move":
-                self._json({"err": "pointer: only 'move' is implemented — "
-                                    "click/scroll/drag/key are refused"}, 400)
+            act = req.get("a")
+            if act not in ("move", "click"):
+                self._json({"err": "pointer: only 'move' and 'click' exist — "
+                                    "scroll/drag/key are refused"}, 400)
+                return
+            if act == "click":
+                if not pcfg.get("click"):
+                    self._json({"err": "pointer: click is disabled — set "
+                                       "pointer.click true in jarvis.json"}, 403)
+                    return
+                b = req.get("button", 1)
+                if isinstance(b, bool) or not isinstance(b, int):
+                    self._json({"err": "pointer: button must be an integer"}, 400)
+                    return
+                status, err = ptr_click(b, req.get("action", "click"),
+                                        int(pcfg.get("clickHz", 8)))
+                if status == "error":
+                    self._json({"err": err}, 400 if "must be" in (err or "") else 503)
+                elif status == "dropped":
+                    self._json({"ok": True, "dropped": True})
+                else:
+                    self._json({"ok": True})
                 return
             x, y = req.get("x"), req.get("y")
             if isinstance(x, bool) or isinstance(y, bool) \

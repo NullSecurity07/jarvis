@@ -1,12 +1,17 @@
 #!/bin/bash
 # jarvis — THE launcher. There is exactly one, on purpose.
 #
-# It opens the board as a small mirror panel: you see yourself, your hands
-# and the ring, it sits stuck to the corner of every workspace, and it
-# never covers what you are working on. Your hands drive the real mouse
-# from inside it, and live views of your own windows can be staged on the
-# glass. Press F to grow it to full screen for a moment and F again to put
-# it back — that is a resize, not a second way to run the thing.
+# It opens the board FULL SCREEN and CLICK-THROUGH: the glass covers the
+# display, your hands drive the real mouse, and every click passes through
+# to whatever is underneath. The camera mirror lives behind the glass —
+# M dials it from full-strength down to off, so you choose how much of
+# yourself you see while you work.
+#
+# Click-through is what makes controlling a desk possible at all. The
+# board is opaque and on top, so a synthetic click at screen coordinates
+# would otherwise land on the board itself instead of the app. Emptying
+# the window's X input shape lets the event through while the glass keeps
+# compositing above it.
 #
 # There used to be three launchers (plain board / HUD / strip). They were
 # three window shapes around one page, and the transparent full-screen
@@ -23,14 +28,12 @@ export DISPLAY="${DISPLAY:-:0}"
 say()  { printf '[jarvis] %s\n' "$*"; }
 fail() { printf '[jarvis] ERROR: %s\n' "$*" >&2; exit 1; }
 
-CFG() { python3 -c "
-import json,sys
-try: d=json.load(open('jarvis.json'))
-except Exception: d={}
-p=d.get('panel') or {}
-print(d.get('port',8794), p.get('w',620), p.get('h',460), p.get('gap',16))" 2>/dev/null || echo "8794 620 460 16"; }
-read -r PORT PW PH GAP <<<"$(CFG)"
-W="${JARVIS_W:-$PW}"; H="${JARVIS_H:-$PH}"; GAP="${JARVIS_GAP:-$GAP}"
+PORT=$(python3 -c "
+import json
+try: print(json.load(open('jarvis.json')).get('port',8794))
+except Exception: print(8794)" 2>/dev/null || echo 8794)
+W=$(xdotool getdisplaygeometry | cut -d' ' -f1)
+H=$(xdotool getdisplaygeometry | cut -d' ' -f2)
 
 # ---- the server
 if ! curl -s -m 1 "http://127.0.0.1:$PORT/config" >/dev/null; then
@@ -45,7 +48,7 @@ say "server up on :$PORT"
 EXIST=$(xdotool search --class jarvis-panel 2>/dev/null | head -1)
 if [ -n "$EXIST" ]; then
   i3-msg -q "[id=$EXIST] focus"
-  say "the panel is already open — focused it. (F grows/shrinks it.)"
+  say "the board is already open — focused it."
   exit 0
 fi
 
@@ -58,15 +61,11 @@ mkdir -p "$PROFILE"
 . ./bin/profile-guard.sh
 board_profile_require_free "$PROFILE" "jarvis"
 
-SCREEN_W=$(xdotool getdisplaygeometry | cut -d' ' -f1)
-SCREEN_H=$(xdotool getdisplaygeometry | cut -d' ' -f2)
-X=$(( SCREEN_W - W - GAP )); Y=$(( SCREEN_H - H - GAP ))
-
 # mode=mirror  : the mirror view — the one that feels right to work in
 # hud=1        : hands drive the REAL mouse (this flag, not the window shape,
 #                is what enables pointer control)
 URL="http://127.0.0.1:$PORT/stage.html?mode=mirror&hud=1"
-say "opening the panel (${W}x${H} at ${X},${Y})…"
+say "opening the board full screen (${W}x${H})…"
 google-chrome-stable \
   --user-data-dir="$PROFILE" \
   --class=jarvis-panel \
@@ -94,7 +93,7 @@ for _ in $(seq 1 40); do
   kill -0 "$CPID" 2>/dev/null || fail "Chrome exited before the window appeared"
   sleep 0.4
 done
-[ -n "$XID" ] || fail "the panel never appeared (chrome pid $CPID)"
+[ -n "$XID" ] || fail "the board never appeared (chrome pid $CPID)"
 
 # floating + sticky: present on every workspace and always mapped, which is
 # what keeps the tracker at full frame rate. border none so no titlebar
@@ -104,26 +103,32 @@ done
 i3-msg -q "[id=$XID] floating enable, border none, sticky enable" \
   || say "WARNING: i3 would not float/stick the window; it still works, it just won't follow you across workspaces"
 
-# The SIZE and POSITION come from the server's `panel` verb, not from a
-# second copy of the geometry here. Two reasons, one of them measured: a
-# chained "floating enable, resize set, move position" issued this early
-# left the window at full screen size — i3 had not finished settling the
-# just-mapped window — while the server's separate calls land reliably.
-# And F uses that same verb, so there is exactly one place that decides
-# what "panel size" means.
+# Size comes from the server's `panel` verb rather than a second copy of
+# the geometry here. Measured reason: a chained "floating enable, resize
+# set, move position" issued this early left the window at the wrong size
+# — i3 had not finished settling the just-mapped window — while the
+# server's separate calls land reliably.
 for _ in $(seq 1 12); do
   sleep 0.4
   curl -s -m 3 -X POST "http://127.0.0.1:$PORT/desks/cmd" \
-    -H 'Content-Type: application/json' -d '{"a":"panel","mode":"panel"}' \
+    -H 'Content-Type: application/json' -d '{"a":"panel","mode":"full"}' \
     | grep -q '"ok"' && break
 done
 
-say "panel up, stuck to every workspace, bottom-right."
+# CLICK-THROUGH. Without this the board eats every click — including the
+# ones your hands aim into a desk card — because it is opaque and on top.
+python3 tools/clickthrough.py "$XID" \
+  || fail "could not make the board click-through; refusing to leave an opaque \
+full-screen window that swallows every click. Close it (it has no titlebar: \
+use your i3 kill binding) and check tools/clickthrough.py."
+
+say "board up, full screen, click-through, on every workspace."
 say ""
 say "  POINT (index up, others folded, ~0.7s)  take the mouse"
 say "  FIST                                    give it back   ·  Esc always releases"
-say "  F  grow to full screen / back      M  mirror brightness      D  debug overlay"
+say "  M  mirror: full -> 60% -> 35% -> 20% -> off      D  debug overlay"
 say ""
-say "Live windows: open the Desks orb, tap a window to stage it. One that is"
-say "on another workspace says OFF-SCREEN — tap it to bring it here and it"
-say "goes live."
+say "TO CONTROL A DESK: open the Desks orb, tap a window to stage it as a"
+say "live card. Then POINT to arm — the card you are aiming at glows — and"
+say "your finger drives that app's real cursor. Pinch to click inside it."
+say "Disarm (fist) and pinch goes back to moving the card around."

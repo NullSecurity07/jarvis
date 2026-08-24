@@ -290,6 +290,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   /* the 409 case: nothing was ever captured — an empty glass frame with
      the title/class already in the bar, NEVER a black square or a stale
      bitmap that could be mistaken for a real view */
+  /* the card your finger is driving right now (Task 26) */
+  .panel.desk.ctl { box-shadow:0 0 0 2px rgba(255,200,110,0.85),
+                               0 0 26px rgba(255,190,90,0.45); }
+  .panel.desk.ctl .badge.live { color:#ffd27d; border-color:rgba(255,210,125,0.8); }
   .panel.desk.nolook .body img { display:none; }
   .panel.desk .nolook-msg { display:none; text-align:center; padding:24px;
                             color:#7fa39c; font:13px "SF Mono",Menlo,monospace;
@@ -635,6 +639,58 @@ function hudGestureTick(cur, ext, now) {
 // DRIVING hand fresh every frame (the owner's first tracked hand; if two
 // owner hands are live, prefer whichever is NOT pinching, so a grab in
 // progress on one hand never fights the pointer on the other).
+// CONTROL THE APP, NOT THE PICTURE OF IT (Task 26). The user's goal:
+// "when i click desks option and open a desk that i should be able to
+// real time view and control that".
+//
+// Given a point in board pixels, if it lands on a live desk card this
+// returns where that same point is on the REAL screen inside that
+// window. The card's <img> is max-width/max-height with no object-fit,
+// centred by flex, so its bounding box IS the displayed pixels — the
+// mapping is exact, letterboxing included, and it survives the card
+// being scaled or rotated because getBoundingClientRect() is post-
+// transform.
+//
+// Only a card whose window is currently CAPTURABLE is offered: an
+// unmapped window is showing you a frozen last frame, and clicking where
+// something used to be is worse than not clicking at all.
+function deskPointAt(px, py) {
+  for (const it of items) {
+    if (!it || it.type !== "desk" || !it.el || !it.def) continue;
+    const img = it.el.querySelector(".body img");
+    if (!img || it.el.classList.contains("nolook")) continue;
+    const r = img.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) continue;
+    if (px < r.left || px > r.right || py < r.top || py > r.bottom) continue;
+    const win = DESKS && (DESKS.wins || []).find(w => w.xid === it.def.xid);
+    if (!win || !win.capturable) continue;
+    if (win.x == null || win.y == null || !win.w || !win.h) continue;
+    const u = Math.min(1, Math.max(0, (px - r.left) / r.width));
+    const v = Math.min(1, Math.max(0, (py - r.top) / r.height));
+    return { it, win,
+             sx: Math.round(win.x + u * win.w),
+             sy: Math.round(win.y + v * win.h) };
+  }
+  return null;
+}
+
+// A pinch while the pointer is ARMED and over a live desk card is a real
+// mouse click inside that app. Disarmed, the same pinch grabs the card
+// and moves it around the glass — that modal split is what lets one
+// gesture mean both things without a new gesture to learn: POINT to take
+// the mouse, FIST to give it back.
+async function deskClick(hit, button) {
+  if (!hit || !PTR_CFG || !PTR_CFG.click) return;
+  try {
+    await fetch("/pointer", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: "move", x: hit.sx, y: hit.sy }) });
+    await fetch("/pointer", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: "click", button: button || 1, action: "click" }) });
+  } catch (e) {}
+}
+
 function hudPointerTick(now) {
   // THE POINTER LAW, literally: unlocked verdict required — no verdict
   // yet (still booting) counts as locked, fail-closed, on purpose.
@@ -661,7 +717,22 @@ function hudPointerTick(now) {
   const offY = (window.screenY || 0) + (window.outerHeight - window.innerHeight);
   const px0 = cur.tipX == null ? cur.x : cur.tipX;   // the index tip drives
   const py0 = cur.tipY == null ? cur.y : cur.tipY;
-  const sx = Math.round(px0 + offX), sy = Math.round(py0 + offY);
+  // Over a live desk card, the pointer goes where you are pointing INSIDE
+  // that window — which is generally nowhere near where your finger is on
+  // the glass, and is the whole point: the card is a remote control for a
+  // window that may be anywhere, including behind this very board.
+  const hit = deskPointAt(px0, py0);
+  // Say which card is live under the finger. Without this the difference
+  // between "pointing at the glass" and "driving that app" is invisible
+  // until you pinch and something happens somewhere else.
+  if (HUD.overDesk !== (hit ? hit.it.id : null)) {
+    HUD.overDesk = hit ? hit.it.id : null;
+    for (const it of items)
+      if (it.type === "desk" && it.el)
+        it.el.classList.toggle("ctl", !!hit && it.id === hit.it.id);
+  }
+  const sx = hit ? hit.sx : Math.round(px0 + offX);
+  const sy = hit ? hit.sy : Math.round(py0 + offY);
   const dx = HUD.lastSend.x == null ? 999 : sx - HUD.lastSend.x;
   const dy = HUD.lastSend.y == null ? 999 : sy - HUD.lastSend.y;
   if (Math.hypot(dx, dy) < 1.5) return;
@@ -3484,7 +3555,6 @@ addEventListener("keydown", e => {
   if (HUD_MODE && (e.key === "a" || e.key === "A")) hudToggleArmed();
   // live respawn: re-read the notes AND props trees from disk before
   // redrawing — a freshly dropped file appears on a plain R press
-  if (e.key === "f" || e.key === "F") panelToggle();   // Task 24: grow/shrink the panel
   if (e.key === "r" || e.key === "R") loadTree().then(() => spawnStage());
   if (e.key === "d" || e.key === "D") dbg.style.display = dbg.style.display === "block" ? "none" : "block";
   if (e.key === "c" || e.key === "C") cycleCam();
@@ -3547,6 +3617,23 @@ function hitTest(cur) {
 // pinch ANYWHERE on anything is always grab/move/flick. No intent lock,
 // no zones, no direction juries. The conflict didn't get solved; it got
 // dissolved (Jared's design).
+
+// PINCH MEANS TWO THINGS, DECIDED BY ONE STATE (Task 26). Armed and over
+// a live desk card, a pinch is a real mouse click inside that app and the
+// card is deliberately NOT grabbed — you are working in the window, not
+// dragging its picture around. Disarmed, everything below behaves exactly
+// as it always has. That reuses the arm gesture the user already knows
+// (POINT to take the mouse, FIST to give it back) instead of inventing a
+// third hand shape to mean "no really, click".
+function grabOrClick(cur, i) {
+  if (HUD_MODE && HUD.armed && cur.role === "owner" && PTR_CFG && PTR_CFG.click) {
+    const hit = deskPointAt(cur.tipX == null ? cur.x : cur.tipX,
+                            cur.tipY == null ? cur.y : cur.tipY);
+    if (hit) { deskClick(hit, 1); foley.grab(); return; }
+  }
+  const c = hitTest(cur);
+  if (c && c.grabbedBy.length < 2 && !c.grabbedBy.includes(i)) beginGrab(c, i, cur);
+}
 
 function beginGrab(c, i, cur) {
   c.flying = false;
@@ -4446,21 +4533,9 @@ function approveGuest(faceId, how) {
 }
 function revokeGuest(faceId) { delete LOCK.approvals[faceId]; toast("guest revoked", 1500); }
 
-// F — GROW THE PANEL AND PUT IT BACK (Task 24). The board is one small
-// sticky mirror panel; this is how it gets big for a moment (reading on
-// the glass, working with live desk cards) without becoming a second way
-// to launch it. The server does the resize because a page cannot move its
-// own i3 window, and it resizes the board window the SERVER identified —
-// nothing here names a target. It is a floating resize, never i3
-// fullscreen, so the windows behind it stay mapped and keep streaming.
-async function panelToggle() {
-  try {
-    const r = await fetch("/desks/cmd", { method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ a: "panel", mode: "toggle" }) });
-    if (!r.ok) toast("could not resize the panel", 1600);
-  } catch (e) { toast("could not resize the panel", 1600); }
-}
+// (The F panel/full toggle was removed in Task 26 — the board is always
+// full screen now, at the user's request. The server's `panel` verb still
+// exists; the launcher uses it to size the window reliably at startup.)
 
 // THE GUEST WHO KEEPS BEING RE-APPROVED (Task 23). A face keeps its id
 // only while it has been seen inside face.graceMs; miss that window and
@@ -5061,11 +5136,7 @@ async function boot() {
             if (dt > 0) born = Math.hypot(b.x - a.x, b.y - a.y) / dt;
           }
           cur.ghost = born > 900;
-          if (!cur.ghost) {
-            const c = hitTest(cur);
-            if (c && c.grabbedBy.length < 2 && !c.grabbedBy.includes(i))
-              beginGrab(c, i, cur);
-          }
+          if (!cur.ghost) grabOrClick(cur, i);
         } else if (cur.pinched && cur.ghost) {
           // v3.9.8 (his rush-grab report: "my hand rushes up, pinches,
           // and it won't grab — I'm having to wait"): a pinch born at
@@ -5075,9 +5146,7 @@ async function boot() {
           // fires — no release, no wait.
           if (hspd < 500 && !items.some(k => k.grabbedBy.includes(i))) {
             cur.ghost = false;
-            const c = hitTest(cur);
-            if (c && c.grabbedBy.length < 2 && !c.grabbedBy.includes(i))
-              beginGrab(c, i, cur);
+            grabOrClick(cur, i);
           }
         } else if (!cur.pinched && wasPinched) {
           // GESTURE v3 (2026-08-14): the double-flash arming machinery
