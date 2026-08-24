@@ -337,6 +337,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      hands get no cursor at all. */
   #behind { transition: filter .35s ease; }
   body.locked #behind { filter: blur(18px) brightness(0.55) saturate(0.6); }
+  /* POINTER MODE LOOKS DIFFERENT (Task 29). The user: "the cursor mode
+     and pinch cirlce makes it confusing". While a hand is driving the
+     real mouse, the big pinch-ring is a lie — it is the glass cursor, and
+     this hand is not touching the glass. Shrink it to a quiet aiming dot
+     in the pointer's own amber, and never let it show the pinched state,
+     which cannot happen for an armed hand anyway now that pinch is
+     cleared for it. The REAL system cursor is the feedback that matters. */
+  .cursor.ptrmode { width:12px; height:12px; margin:-6px 0 0 -6px;
+                    border-color:rgba(255,200,110,0.95);
+                    background:rgba(255,200,110,0.25);
+                    box-shadow:0 0 10px rgba(255,190,90,0.5); transform:none; }
+  .cursor.ptrmode.pinched { background:rgba(255,200,110,0.25); transform:none;
+                            box-shadow:0 0 10px rgba(255,190,90,0.5); }
+  .cursor.ptrmode .dwell { display:none; }
   body.locked .cursor, .cursor.blocked { display:none; }
   body.locked #hint { color:#ff9f9f; }
   #facelayer { position:fixed; inset:0; z-index:3; pointer-events:none; }
@@ -617,12 +631,12 @@ function hudSetArmed(v) {
   if (!v) ptrReleaseAll("disarmed");
   const b = hudBadge();
   if (b) {
-    b.textContent = v ? "POINTER ARMED — make a FIST to release (or Esc / A)"
+    b.textContent = v ? "POINTER ARMED · thumb tap = click — 1 finger L · 2 R · 3 M · hold = drag · FIST to release"
                        : "POINTER IDLE · point ☝ and hold to arm (or A)";
     b.classList.toggle("armed", v);
   }
-  toast(v ? "pointer ARMED — your fingertip drives the mouse · fist to release"
-          : "pointer idle — the mouse is yours again", 1600);
+  toast(v ? "pointer ARMED — tap your thumb to click · 2 fingers = right · 3 = middle · fist to release"
+          : "pointer idle — the mouse is yours again", 2200);
 }
 function hudToggleArmed() { if (HUD_MODE) hudSetArmed(!HUD.armed); }
 function hudDisarm() { if (HUD.armed) hudSetArmed(false); }
@@ -714,32 +728,40 @@ async function deskClick(hit, button) {
 // double click (both), scroll and middle click gesture like a full mouse
 // basically".
 //
-// Pinch is deliberately NOT a button. It already means "grab this card"
-// everywhere else on the glass, and overloading it was the crude part.
-// Instead the THUMB is the button bar and the other fingers are the
-// buttons — thumb touches middle = left, ring = right, pinky = middle,
-// which is a real chord your hand can make without looking:
+// REBUILT (Task 29) after the first real attempt. The previous version
+// asked the thumb to tap the MIDDLE, RING and PINKY fingertips — which
+// is impossible in the pointing pose, because those three fingers are
+// folded into the palm holding the point. The user, exactly right: "the
+// gestures are hard to do knowing the fingers are fisted for the pointer
+// so if i open it, it will go to pinch mode".
 //
-//   move          index out, hand moves            cursor follows the tip
-//   LEFT click    thumb taps MIDDLE fingertip
-//   RIGHT click   thumb taps RING fingertip
-//   MIDDLE click  thumb taps PINKY fingertip
-//   double click  two left taps inside doubleMs    (both buttons double)
-//   drag          hold thumb on middle             press ... release
-//   SCROLL        index+middle out (a "peace"), move the hand up/down
+// So the thumb is the ONLY button, and it never has to reach a buried
+// fingertip — it just moves toward the base of the index, the way a
+// thumb naturally clicks. Which button it means is chosen by how many
+// fingers are out, which you can do without disturbing the point:
 //
-// Every tap is measured thumb-tip to finger-tip in SPAN units (the
-// wrist-to-middle-knuckle distance), so it is invariant to how far from
-// the camera the hand is. A tap needs the contact to BREAK again before
-// it counts, which is what separates a tap from a hold, and a hold is
-// what makes drag possible at all.
+//   index out                  MOVE          · thumb tap = LEFT click
+//   index + middle out         MOVE + SCROLL · thumb tap = RIGHT click
+//   index + middle + ring out                · thumb tap = MIDDLE click
+//   two thumb taps quickly     double click (of whichever button)
+//   thumb held in              DRAG — press, move, release when it lifts
+//   fist                       disarm (unchanged)
+//
+// Pinch is deliberately not a button: it means "grab this card"
+// everywhere else on the glass. And while armed, the driving hand's glass
+// gestures are suppressed entirely (see the armed check in the hand
+// loop), so opening fingers to pick a button can no longer fall through
+// into pinch/grab territory — which was the other half of the complaint.
+//
+// Thumb distance is measured to the index KNUCKLE (landmark 5), not to
+// any fingertip: it stays far from the tip-to-tip distance the board's
+// own pinch test uses, so a click can never read as a pinch.
 const PTR_G = {
-  tapIn: 0.45, tapOut: 0.62,   // hysteresis, in span units
-  holdMs: 320,                 // contact longer than this = drag, not click
+  tapIn: 0.62, tapOut: 0.85,   // thumb-to-index-knuckle, in span units
+  holdMs: 350,                 // contact longer than this = drag, not click
   doubleMs: 400,               // two taps inside this = the app sees a double
   scrollPxPerClick: 38,        // hand travel per wheel click
 };
-const PTR_FINGER = { 12: 1, 16: 3, 20: 2 };   // fingertip -> X11 button
 
 async function ptrSend(body) {
   try {
@@ -757,9 +779,16 @@ function ptrMouseTick(cur, lms, span, extArr, now) {
   const th = lms[4];
   cur.ptrTap = cur.ptrTap || {};
 
-  // ---- SCROLL: index + middle out, ring + pinky folded, hand moves
+  // WHICH BUTTON: how many fingers are out. 1 = left, 2 = right, 3 =
+  // middle. Chosen this way because adding a finger is easy from the
+  // pointing pose, while reaching a folded fingertip with the thumb is not.
+  const nOut = (extArr[0] ? 1 : 0) + (extArr[1] ? 1 : 0) + (extArr[2] ? 1 : 0);
+  const button = nOut >= 3 ? 2 : nOut === 2 ? 3 : 1;
+  cur.ptrButtonHint = button;
+
+  // ---- SCROLL: index + middle out, hand moves up/down
   const peace = extArr[0] && extArr[1] && !extArr[2] && !extArr[3];
-  if (peace) {
+  if (peace && !cur.ptrContact) {
     if (cur.scrollY0 == null) cur.scrollY0 = cur.y;
     const dy = cur.y - cur.scrollY0;
     const steps = Math.trunc(dy / g.scrollPxPerClick);
@@ -770,53 +799,54 @@ function ptrMouseTick(cur, lms, span, extArr, now) {
       for (let k = 0; k < Math.min(5, Math.abs(steps)); k++)
         ptrSend({ a: "click", button, action: "click" });
     }
-    // a scrolling hand is not a clicking hand: drop any held button
+    // Scrolling and clicking are different acts; do not let a scroll
+    // leave a button held down.
     if (cur.ptrBtn) { ptrSend({ a: "click", button: cur.ptrBtn, action: "release" }); cur.ptrBtn = null; }
-    return;
+  } else if (!peace) {
+    cur.scrollY0 = null;
   }
-  cur.scrollY0 = null;
 
-  // ---- BUTTONS: thumb against middle / ring / pinky
-  let nearTip = null, nearD = 9;
-  for (const t of [12, 16, 20]) {
-    const d = Math.hypot(th.x - lms[t].x, th.y - lms[t].y) / span;
-    if (d < nearD) { nearD = d; nearTip = t; }
-  }
+  // ---- THE BUTTON: the thumb, moving toward the index knuckle
+  const nearD = Math.hypot(th.x - lms[5].x, th.y - lms[5].y) / span;
+  // Published on the heartbeat so tapIn/tapOut can be fitted to a real
+  // hand instead of guessed at: watch it while opening and closing the
+  // thumb and put the two thresholds either side of the gap.
+  HUD.thumb = Math.round(nearD * 100) / 100;
+  HUD.nOut = nOut;
   const contact = cur.ptrContact
-    ? nearD < g.tapOut          // already touching: hold until it clearly opens
-    : nearD < g.tapIn;          // not touching: needs a firm contact to start
+    ? nearD < g.tapOut          // already down: hold until it clearly lifts
+    : nearD < g.tapIn;          // not down: needs a firm press to start
 
-  if (contact && !cur.ptrContact) {          // contact begins
-    cur.ptrContact = nearTip;
+  if (contact && !cur.ptrContact) {          // thumb goes down
+    cur.ptrContact = button;                 // remember which button it meant
     cur.ptrContactT = now;
     cur.ptrDragged = false;
   } else if (contact && cur.ptrContact) {    // contact continues
     if (!cur.ptrBtn && !cur.ptrDragged && now - cur.ptrContactT > g.holdMs) {
-      cur.ptrBtn = PTR_FINGER[cur.ptrContact] || 1;   // becomes a DRAG
+      cur.ptrBtn = cur.ptrContact || 1;               // becomes a DRAG
       cur.ptrDragged = true;
       ptrSend({ a: "click", button: cur.ptrBtn, action: "press" });
       toast("drag", 700);
     }
-  } else if (!contact && cur.ptrContact) {   // contact breaks
-    const tip = cur.ptrContact, held = now - cur.ptrContactT;
+  } else if (!contact && cur.ptrContact) {   // thumb lifts
+    const btn = cur.ptrContact, held = now - cur.ptrContactT;
     cur.ptrContact = null;
     if (cur.ptrBtn) {                        // end of a drag
       ptrSend({ a: "click", button: cur.ptrBtn, action: "release" });
       cur.ptrBtn = null;
     } else if (held <= g.holdMs) {           // a tap = a click
-      const button = PTR_FINGER[tip] || 1;
-      ptrSend({ a: "click", button, action: "click" });
+      ptrSend({ a: "click", button: btn, action: "click" });
       // A DOUBLE IS TWO SINGLES, on purpose: X11 has no "double click"
       // event — every application decides for itself from the gap between
       // two presses. Sending two real clicks inside its own threshold is
       // exactly what a physical mouse does, and it works for whatever the
       // app's threshold happens to be.
-      const prev = cur.ptrTap[button] || 0;
-      cur.ptrTap[button] = now;
+      const prev = cur.ptrTap[btn] || 0;
+      cur.ptrTap[btn] = now;
       const dbl = now - prev < g.doubleMs;
       foley.grab();
-      toast(dbl ? (button === 3 ? "right double" : "double click")
-                : (button === 1 ? "left click" : button === 3 ? "right click" : "middle click"), 700);
+      toast(dbl ? (btn === 3 ? "right double-click" : btn === 2 ? "middle double-click" : "double click")
+                : (btn === 1 ? "left click" : btn === 3 ? "right click" : "middle click"), 700);
     }
   }
 }
@@ -2836,6 +2866,13 @@ async function desksHealthCheck() {
   try { const r = await fetch("/desks"); if (r.ok) d = await r.json(); }
   catch (e) { return; }
   if (!d) return;
+  // ONE SOURCE OF TRUTH (Task 29). This function fetched fresh /desks
+  // data and used it for the badges, while deskPointAt read the cached
+  // DESKS global that only refreshes when the Desks orb is opened. They
+  // drifted apart, and the user saw the result: a card's badge reading
+  // LIVE while aiming at it said "that window is off-screen". The badge
+  // was the stale one. Publishing the fresh data here makes both agree.
+  DESKS = d;
   const aliveXids = new Set((d.wins || []).map(w => w.xid));
   let closedAny = false;
   live.forEach(it => {
@@ -5327,10 +5364,26 @@ async function boot() {
         if (HUD_MODE && cur.role === "owner") hudGestureTick(cur, extArr, now);
         // THE HAND IS A MOUSE (Task 28) — only while armed, only the
         // owner, same gate as every other pointer send.
-        if (HUD_MODE && HUD.armed && cur.role === "owner")
+        if (HUD_MODE && HUD.armed && cur.role === "owner") {
           ptrMouseTick(cur, lms, span, extArr, now);
-        else if (cur.ptrBtn || cur.ptrContact) { cur.ptrContact = null;
-          if (cur.ptrBtn) { ptrSend({ a: "click", button: cur.ptrBtn, action: "release" }); cur.ptrBtn = null; } }
+          // WHILE ARMED, THIS HAND IS A MOUSE AND NOTHING ELSE (Task 29).
+          // The user: "if i open it, it will go to pinch mode (like it
+          // should)" — opening a finger to pick a button was falling
+          // through into the glass gesture set and grabbing cards. Every
+          // glass interaction downstream keys off cur.pinched, so
+          // clearing it here retires this hand from the glass for as long
+          // as it is driving the pointer. A held card is released the
+          // same way a vanished hand releases one, and arm/disarm is
+          // unaffected: hudGestureTick already ran, above.
+          cur.pinched = false;
+          cur.el.classList.add("ptrmode");
+        } else {
+          cur.el.classList.remove("ptrmode");
+          if (cur.ptrBtn || cur.ptrContact) {
+            cur.ptrContact = null;
+            if (cur.ptrBtn) { ptrSend({ a: "click", button: cur.ptrBtn, action: "release" }); cur.ptrBtn = null; }
+          }
+        }
         // ---- GUEST APPROVAL (owner's hand only): thumbs-up held, or a
         // tap on a candidate's chip; a tap on a guest's chip revokes.
         if (cur.role === "owner" && V.guestCandidates.length + Object.keys(LOCK.approvals).length) {
@@ -6165,7 +6218,8 @@ function pushState(now) {
     // it identifies nothing but the tab.
     page: { id: PAGE_ID, mode: MODE, hud: HUD_MODE, role: Q.get("role") || "tracker" },
     hud: { on: HUD_MODE, armed: HUD.armed, hz: (PTR_CFG && PTR_CFG.rateHz) || 90,
-           mirror: MIRROR_STEPS[MIRROR_I], overDesk: HUD.overDesk || null },
+           mirror: MIRROR_STEPS[MIRROR_I], overDesk: HUD.overDesk || null,
+           thumb: HUD.thumb == null ? null : HUD.thumb, nOut: HUD.nOut == null ? null : HUD.nOut },
     faces: FACES ? FACES.list().filter(f => f.seenNow).map(f => ({
       id: f.id, role: (LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "unknown",
       x: +f.cx.toFixed(3), y: +f.cy.toFixed(3), w: +f.w.toFixed(3), h: +f.h.toFixed(3),
