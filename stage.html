@@ -373,6 +373,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      jumped away into that window and the dot is the only thing showing
      where your hand actually is. */
   .cursor.ptrmode { display:none; }
+  @keyframes ptrclick { 0% { transform:scale(1); opacity:1; }
+                        100% { transform:scale(2.6); opacity:0; } }
+  .cursor.clickflash::after { content:""; position:absolute; inset:-4px;
+                              border-radius:50%; border:2px solid rgba(255,210,120,0.95);
+                              animation:ptrclick .38s ease-out forwards; }
   .cursor.ptrmode.ondesk { display:block;
                     width:14px; height:14px; margin:-7px 0 0 -7px;
                     border-color:rgba(255,200,110,0.95);
@@ -430,6 +435,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
               background:rgba(8,28,32,0.62); color:#bfe8de;
               box-shadow:0 6px 24px rgba(0,0,0,0.35); }
   body.hud #hudbadge { display:block; }
+  #hudbadge.down { background:rgba(255,170,60,0.95); color:#1a1000; }
   #hudbadge.armed { color:#1a0a06; background:rgba(255,176,64,0.92);
                     border-color:rgba(255,214,140,0.9);
                     box-shadow:0 0 22px rgba(255,150,40,0.65), 0 6px 24px rgba(0,0,0,0.35);
@@ -658,7 +664,7 @@ function hudSetArmed(v) {
   // that button down on the real desktop with no gesture left to release
   // it — every subsequent move becomes a drag and the user has to reach
   // for the physical mouse to escape.
-  if (!v) ptrReleaseAll("disarmed");
+  if (!v) { ptrReleaseAll("disarmed"); _ptrBadgeState = ""; }
   const b = hudBadge();
   if (b) {
     b.textContent = v ? "POINTER ARMED · thumb tap = click — 1 finger L · 2 R · 3 M · hold = drag · FIST to release"
@@ -806,8 +812,13 @@ async function deskClick(hit, button) {
 //     distances on its own, and that was firing drags mid-gesture)
 //   - a cooldown after each click, so one press cannot chatter into many
 const PTR_G = {
-  dipIn: 0.68,        // press when the distance falls to this fraction of baseline
-  dipOut: 0.82,       // release when it comes back above this fraction
+  // FITTED FROM THE DIP HISTOGRAM (216 logged samples): at rest the ratio
+  // sits at 0.95-1.05, and a deliberate press runs down to 0.54. 0.68 sat
+  // at the very bottom of that range, so only the deepest presses counted
+  // and everything shallower was silently ignored. 0.80 separates the two
+  // populations with room on both sides.
+  dipIn: 0.80,        // press when the distance falls to this fraction of baseline
+  dipOut: 0.90,       // release when it comes back above this fraction
   minMs: 70,          // shorter than this is noise, not a tap
   holdMs: 700,        // longer than this is a DRAG (was 350 — too easy to trip)
   cooldownMs: 320,    // no second click may start inside this
@@ -816,6 +827,20 @@ const PTR_G = {
   scrollPxPerClick: 38,
   baseAlpha: 0.06,    // how fast the resting baseline follows the hand
 };
+
+let _ptrBadgeState = "";
+function ptrBadgeMode(button, down) {
+  const b = hudBadge();
+  if (!b || !HUD.armed) return;
+  const name = button === 3 ? "RIGHT" : button === 2 ? "MIDDLE" : "LEFT";
+  const key = name + (down ? "!" : "");
+  if (key === _ptrBadgeState) return;
+  _ptrBadgeState = key;
+  b.textContent = down
+    ? `● ${name} DOWN — lift the thumb to click, hold to drag`
+    : `POINTER ARMED · ${name} click — tap thumb · 2 fingers = right · 3 = middle · FIST to release`;
+  b.classList.toggle("down", down);
+}
 
 async function ptrSend(body) {
   try {
@@ -855,6 +880,11 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
   const nOut = ptrFingersOut(wl, extArr);
   const button = nOut >= 3 ? 2 : nOut === 2 ? 3 : 1;
   cur.ptrButtonHint = button;
+  // SHOW THE MODE BEFORE IT IS COMMITTED. Which button a tap sends
+  // depends on how many fingers are out, and until now that was invisible
+  // — you found out by clicking and seeing what happened. The badge names
+  // it live, and lights up while the thumb is actually down.
+  ptrBadgeMode(button, !!cur.ptrContact);
 
   // ---- SCROLL: index + middle out, hand moves up/down
   const peace = extArr[0] && extArr[1] && !extArr[2] && !extArr[3];
@@ -894,18 +924,31 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
   else if (!cur.ptrContact)
     cur.thBase += (nearD - cur.thBase) * g.baseAlpha;
 
-  // gates: pointing, still, and not inside a cooldown
-  const pointing = !!extArr[0];
-  cur.ptrPointing = pointing;
+  // GATES, loosened where the data said they were rejecting real presses.
+  //
+  // "the index must be extended" was rejecting most of them: the 2D test
+  // foreshortens when the hand aims at the lens, and the 3D count read 0
+  // on 131 of 216 logged samples while the user was actively using it.
+  // The gate that matters is NOT-A-FIST, and either test seeing a finger
+  // is enough. A real fist disarms the pointer anyway, so this is a
+  // belt-and-braces check rather than the thing holding the line.
+  const pointing = !!extArr[0] || nOut >= 1;
+  cur.ptrPointing = !!extArr[0] || nOut >= 1;
   const dx = cur.x - (cur.ptrLastX ?? cur.x), dy = cur.y - (cur.ptrLastY ?? cur.y);
   cur.ptrLastX = cur.x; cur.ptrLastY = cur.y;
   const still = Math.hypot(dx, dy) < g.stillPx;
   const cool = now - (cur.ptrClickT || 0) < g.cooldownMs;
 
+  const dipped = nearD < cur.thBase * g.dipIn;
   const contact = cur.ptrContact
     ? nearD < cur.thBase * g.dipOut          // down: hold until it comes back out
-    : (pointing && still && !cool && nearD < cur.thBase * g.dipIn);
+    : (pointing && still && !cool && dipped);
   HUD.thBase = Math.round(cur.thBase * 100) / 100;
+  // If a dip happened but no press followed, record which gate ate it.
+  // Guessing at that from the outside has cost several rounds.
+  if (dipped && !cur.ptrContact)
+    HUD.blocked = !pointing ? "fist" : !still ? "moving" : cool ? "cooldown" : null;
+  else if (dipped) HUD.blocked = null;
 
   if (contact && !cur.ptrContact) {          // thumb goes down
     cur.ptrContact = button;                 // remember which button it meant
@@ -927,6 +970,13 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
     } else if (held >= g.minMs && held <= g.holdMs) {   // a tap = a click
       cur.ptrClickT = now;
       ptrSend({ a: "click", button: btn, action: "click" });
+      // flash the aiming dot: the toast lives at the top of the glass and
+      // is easy to miss when you are looking at the app you just clicked
+      if (cur.el) {
+        cur.el.classList.remove("clickflash");
+        void cur.el.offsetWidth;              // restart the animation
+        cur.el.classList.add("clickflash");
+      }
       // A DOUBLE IS TWO SINGLES, on purpose: X11 has no "double click"
       // event — every application decides for itself from the gap between
       // two presses. Sending two real clicks inside its own threshold is
@@ -2940,14 +2990,21 @@ function deskFitAspect(it, img) {
   it._fitW = nw; it._fitH = nh;
   const body = it.el.querySelector(".body");
   if (!body) return;
-  // Size the BODY, not the card. The card's box also contains a bar with
-  // 42px padding and 1.5px borders, so deriving a card height from an
-  // image aspect means guessing that chrome and being wrong by it.
-  // clientWidth is the body's own content width, padding excluded.
-  const w = body.clientWidth;
-  if (!w) return;
-  const want = Math.round(w * nh / nw);
-  if (Math.abs(body.clientHeight - want) > 2) {
+  // FIT THE TILE TO THE SCREEN, not to a fixed width. Holding the width at
+  // 1280 and deriving the height meant a PORTRAIT window produced a body
+  // 1378px tall — taller than the display — which the render cap then had
+  // to shrink to 70%, throwing away resolution to undo a size this
+  // function chose. Fitting inside a target box keeps every window shape
+  // a sensible tile, and leaves the cap as a backstop rather than a
+  // participant.
+  const T = TUNE.desks || {};
+  const boxW = innerWidth * (T.tileW ?? 0.62), boxH = innerHeight * (T.tileH ?? 0.68);
+  const a2 = nw / nh;
+  const w = Math.round(Math.min(boxW, boxH * a2));
+  const want = Math.round(w / a2);
+  if (Math.abs(body.clientWidth - w) > 2 || Math.abs(body.clientHeight - want) > 2) {
+    it.el.style.width = w + "px";
+    body.style.width = w + "px";
     body.style.height = want + "px";
     // AND SET THE SCALE HERE, from the box we just created.
     //
@@ -6438,6 +6495,7 @@ function pushState(now) {
            // be verified from a headless page instead of a screenshot
            thumbCm: HUD.thumbCm == null ? null : HUD.thumbCm,
            thBase: HUD.thBase == null ? null : HUD.thBase,
+           blocked: HUD.blocked || null,
            card: (() => {
              const it = items.find(i => i.type === "desk" && i.el);
              if (!it) return null;

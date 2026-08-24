@@ -151,8 +151,8 @@
     "lerp": 0.75,
     "deadPx": 0.6,
     "gesture": {
-      "dipIn": 0.68,
-      "dipOut": 0.82,
+      "dipIn": 0.8,
+      "dipOut": 0.9,
       "minMs": 70,
       "holdMs": 700,
       "cooldownMs": 320,
@@ -164,6 +164,8 @@
   },
   "desks": {
     "openFull": false,
-    "_": "THE DESKS on the glass. openFull: the first desk card you open goes FULL SCREEN immediately (bar and frame dropped, body sized to the window's own aspect \u2014 on a 1920x1080 display showing a 1920x1044 window that is 1:1, no resampling). Set false to have desks open tiled on the glass instead, at roughly 70% of native. Toggle either way with Z, or bin/board.sh '{\"a\":\"deskfull\"}' \u2014 which is the dependable one, since the board is click-through and this i3 is focus_follows_mouse, so it often has no keyboard focus."
+    "_": "THE DESKS on the glass. openFull: the first desk card you open goes FULL SCREEN immediately (bar and frame dropped, body sized to the window's own aspect \u2014 on a 1920x1080 display showing a 1920x1044 window that is 1:1, no resampling). Set false to have desks open tiled on the glass instead, at roughly 70% of native. Toggle either way with Z, or bin/board.sh '{\"a\":\"deskfull\"}' \u2014 which is the dependable one, since the board is click-through and this i3 is focus_follows_mouse, so it often has no keyboard focus. tileW/tileH: a desk tile is fitted inside this fraction of the viewport, preserving the window's own aspect \u2014 so a portrait window becomes a tall narrow tile rather than one taller than the screen that then has to be scaled back down.",
+    "tileW": 0.62,
+    "tileH": 0.68
   }
 }
