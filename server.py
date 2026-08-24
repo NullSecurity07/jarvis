@@ -511,11 +511,14 @@ _BOARD = {"sig": None, "t": 0.0}
 _BOARD_TYPES = ("card", "img", "model", "panel", "media")
 # ptype/fsrc/proot/prel/mk (Task 16 fix round 1): a files-browser panel or
 # media card round-trips through /file on restore, not the notes-jailed
-# /note — the page (pg/pgs) is deliberately NOT persisted, a restored PDF
-# just reopens at page 1.
+# /note. pg (Task 18): a PDF is now a continuous scrollable strip, not a
+# slideshow — pg persists the page that covered the viewport's midline
+# when last saved, and restoreBoard() jumps the reopened strip straight
+# to that page's offset (pgs isn't needed — trivially recomputed from
+# the reopened doc).
 _BOARD_KEYS = ("type", "title", "body", "src", "mm", "lf", "ex", "rx", "ry",
                "rz", "file", "x", "y", "scale", "ptype", "fsrc", "proot",
-               "prel", "mk")
+               "prel", "mk", "pg")
 
 
 def _persist_board(body):

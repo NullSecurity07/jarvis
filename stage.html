@@ -229,11 +229,17 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                    white-space:pre-wrap; font-family:-apple-system,sans-serif; }
   .panel .scroll b { color:#fff; } .panel .scroll .h { color:#8ff0e4; font-weight:700; }
   .panel.textview .scroll { font-family:"SF Mono",Menlo,monospace; font-size:13px; }
-  .panel.pdfview .body { display:flex; align-items:center; justify-content:center; }
-  .panel.pdfview .scroll { display:flex; align-items:center; justify-content:center;
-                            overflow:auto; white-space:normal; }
-  .panel.pdfview canvas { max-width:100%; max-height:100%; border-radius:6px;
-                          box-shadow:0 6px 30px rgba(0,0,0,0.4); }
+  /* Task 18: one continuous strip, not a centered single page — .scroll
+     gets an explicit height (the sum of every placeholder) and each
+     .pdfpage is absolutely positioned at its real top, so the strip's
+     offsetHeight is right from the first frame and the shared
+     translateY(-scrollY) scroll mechanism (same as text/note panels)
+     just works, no separate scroll code path needed. */
+  .panel.pdfview .scroll { display:block; position:relative; white-space:normal; }
+  .panel.pdfview .pdfpage { position:absolute; left:0; right:0; border-radius:6px;
+                            overflow:hidden; background:rgba(10,30,27,0.4);
+                            box-shadow:0 6px 24px rgba(0,0,0,0.35); }
+  .panel.pdfview .pdfpage canvas { display:block; width:100%; height:100%; }
   .card.mediacard video, .card.mediacard audio { width:100%; border-radius:8px;
                                                   display:block; margin-top:4px; }
   /* THE DESKS (Task 17): a live i3 window, flat and crisp — the rim
@@ -428,6 +434,7 @@ const TUNE_DEFAULTS = {
             maxPerFrame: 1, everyNthFrame: 1 },
   image3d: { enabled: true, depth: 0.22, seg: 160, alphaCut: 0.35, rim: 0.55,
              rimTint: "image", bloom: 0.45, exposure: 0.95, flat: false },
+  scroll: { gain: 1.4, friction: 0.004, minFlick: 120, stop: 20, pdfAhead: 1 },
 };
 function tuneMerge(base, over) {
   const out = Array.isArray(base) ? base.slice() : { ...base };
@@ -1717,6 +1724,7 @@ function applyCmds(cmds) {
       if (p && p.def.ptype === "pdf") {
         pdfGoPage(p, c.dir);
       } else if (p && p.body) {
+        p.sVel = 0;                 // an explicit jump beats any residual coast
         const box = p.body.parentElement.clientHeight;
         const maxS = Math.max(0, p.body.offsetHeight - box + 40);
         p.sTarget = c.dir === "top" ? 0 : Math.min(maxS, Math.max(0,
@@ -2462,55 +2470,144 @@ async function openTextPanel(url, name) {
   return p;
 }
 
-// ---- THE PDF PANEL: pdf.js renders page 1 to a canvas lazily, caching
-// the last 3 pages per document so paging back is instant. Page state
-// (page/pages) lives on the tracker item and travels through pushState
-// so the scroll_note command AND the hand-scroll gesture can turn pages
-// (see applyCmds' scroll_note branch and the held.mode==="scroll" drag
-// handler), and so the render page mirrors whichever page is showing.
-const PDFSTATE = new Map();   // item id -> { doc, cache: Map<page, canvas> }
+// ---- THE PDF PANEL (Task 18: a document, not a slideshow): pdf.js gets
+// every page's viewport up front (getPage + getViewport — metadata only,
+// no render) so the panel's .scroll is one continuous strip of real-height
+// placeholder <div class="pdfpage">s from the very first frame; the scroll
+// height (and so the scrollbar/position) never jumps as pages fill in.
+// Only pages whose placeholder is within TUNE.scroll.pdfAhead of the
+// visible box get an actual <canvas>; anything more than 2 pages away is
+// evicted back to a blank placeholder and any in-flight page.render() task
+// is .cancel()'d — a fast flick through a 300-page PDF costs the same as a
+// 3-page one (bound: canvases resident ~= visible pages + 2 either side,
+// independent of document length — the old bound was "last 3 rendered,
+// history order"; this one is "currently near the viewport", which is
+// the bound that actually matters for a strip you scroll continuously).
+// p.page mirrors whichever page's placeholder covers the viewport's
+// midline and travels through pushState (as before) so the scroll_note
+// command and the render-mirror both see the live page number.
+const PDFSTATE = new Map();   // item id -> { doc, canvases: Map<pg,canvas>, tasks: Map<pg,RenderTask> }
 
 async function pdfEnsureDoc(id, root, rel) {
   let st = PDFSTATE.get(id);
   if (st) return st;
-  st = { doc: null, cache: new Map() };
+  st = { doc: null, canvases: new Map(), tasks: new Map() };
   PDFSTATE.set(id, st);
   try { st.doc = await pdfjsLib.getDocument(fileURL(root, rel)).promise; }
   catch (e) { st.err = true; }
   return st;
 }
 
-async function pdfDrawPage(canvas, id, root, rel, page) {
-  const st = await pdfEnsureDoc(id, root, rel);
-  if (!st.doc) return null;
-  const pages = st.doc.numPages;
-  page = Math.max(1, Math.min(pages, page || 1));
-  let off = st.cache.get(page);
-  if (!off) {
-    const pg = await st.doc.getPage(page);
-    const vp0 = pg.getViewport({ scale: 1 });
-    const scale = 1000 / vp0.width;             // a sensible ~1000px width
-    const vp = pg.getViewport({ scale });
-    off = document.createElement("canvas");
-    off.width = Math.round(vp.width); off.height = Math.round(vp.height);
-    await pg.render({ canvasContext: off.getContext("2d"), viewport: vp }).promise;
-    st.cache.set(page, off);
-    if (st.cache.size > 3) {                    // cache the last 3 pages
-      for (const k of st.cache.keys()) { if (k !== page) { st.cache.delete(k); break; } }
-    }
-  }
-  canvas.width = off.width; canvas.height = off.height;
-  canvas.getContext("2d").drawImage(off, 0, 0);
-  return { page, pages };
+function pdfCleanup(id) {
+  const st = PDFSTATE.get(id);
+  if (st) for (const t of st.tasks.values()) { try { t.cancel(); } catch (e) {} }
+  PDFSTATE.delete(id);
 }
 
-function pdfCleanup(id) { PDFSTATE.delete(id); }
+// p is either a real panel item (openPdfPanel) or a render-mirror stand-in
+// shaped the same way — .id, .def.{root,rel,title}, .el, .body, .scrollY —
+// so the tracker and the on-air mirror share every function below.
+async function pdfBuildStrip(p) {
+  const st = await pdfEnsureDoc(p.id, p.def.root, p.def.rel);
+  const h3 = p.el.querySelector(".bar h3");
+  if (!st.doc) { if (h3) h3.textContent = p.def.title + " — couldn't load"; return; }
+  const n = st.doc.numPages;
+  const W = p.body.parentElement.clientWidth || 805;
+  const gap = 10;
+  const pages = await Promise.all(
+    Array.from({ length: n }, (_, k) => st.doc.getPage(k + 1)));
+  let top = 0;
+  const metas = [];
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < n; i++) {
+    const vp0 = pages[i].getViewport({ scale: 1 });
+    const scale = W / vp0.width;
+    const h = Math.round(vp0.height * scale);
+    const div = document.createElement("div");
+    div.className = "pdfpage";
+    div.style.top = top + "px"; div.style.height = h + "px";
+    frag.appendChild(div);
+    metas.push({ top, h, scale });
+    top += h + gap;
+  }
+  p.body.innerHTML = "";
+  p.body.appendChild(frag);
+  p.body.style.height = Math.max(0, top - gap) + "px";
+  p.pdfMeta = metas;
+  p.page = 1; p.pages = n;
+  if (h3) h3.textContent = `${p.def.title} · 1/${n}`;
+  p._pdfSyncY = -1;                    // force the first sync below
+  pdfSyncVisible(p);
+}
+
+function pdfEvict(p, st, pg) {
+  const t = st.tasks.get(pg);
+  if (t) { try { t.cancel(); } catch (e) {} st.tasks.delete(pg); }
+  st.canvases.delete(pg);
+  const div = p.body.children[pg - 1];
+  if (div) div.innerHTML = "";
+}
+
+async function pdfRenderPage(p, st, pg) {
+  const meta = p.pdfMeta && p.pdfMeta[pg - 1];
+  const div = p.body.children[pg - 1];
+  if (!meta || !div) return;
+  let page;
+  try { page = await st.doc.getPage(pg); } catch (e) { return; }
+  if (st.canvases.has(pg)) return;             // already drawn while we awaited
+  const vp = page.getViewport({ scale: meta.scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+  const task = page.render({ canvasContext: canvas.getContext("2d"), viewport: vp });
+  st.tasks.set(pg, task);
+  try {
+    await task.promise;
+    if (st.tasks.get(pg) !== task) return;      // superseded/evicted meanwhile
+    st.tasks.delete(pg);
+    if (!div.isConnected) return;
+    div.innerHTML = ""; div.appendChild(canvas);
+    st.canvases.set(pg, canvas);
+  } catch (e) {
+    if (st.tasks.get(pg) === task) st.tasks.delete(pg);   // cancelled or failed — fine
+  }
+}
+
+// called every time p.scrollY actually changes (drag, momentum, glide, or
+// a cold restore) — cheap when nothing's changed since canvases/tasks
+// already cover the wanted range, so calling it every physics tick is fine
+function pdfSyncVisible(p) {
+  const st = PDFSTATE.get(p.id);
+  if (!st || !st.doc || !p.pdfMeta || !p.pdfMeta.length) return;
+  const n = p.pdfMeta.length;
+  const box = p.body.parentElement.clientHeight;
+  const y0 = p.scrollY || 0, y1 = y0 + box;
+  let first = p.pdfMeta.findIndex(m => m.top + m.h >= y0);
+  if (first === -1) first = n - 1;
+  let last = first;
+  while (last + 1 < n && p.pdfMeta[last + 1].top <= y1) last++;
+  const ahead = (TUNE.scroll && TUNE.scroll.pdfAhead) ?? 1;
+  const rLo = Math.max(1, first + 1 - ahead), rHi = Math.min(n, last + 1 + ahead);
+  for (const pg of new Set([...st.canvases.keys(), ...st.tasks.keys()])) {
+    if (pg < first + 1 - 2 || pg > last + 1 + 2) pdfEvict(p, st, pg);
+  }
+  for (let pg = rLo; pg <= rHi; pg++) {
+    if (!st.canvases.has(pg) && !st.tasks.has(pg)) pdfRenderPage(p, st, pg);
+  }
+  const midY = y0 + box / 2;
+  let mid = p.pdfMeta.findIndex(m => midY >= m.top && midY < m.top + m.h);
+  if (mid === -1) mid = Math.max(0, Math.min(n - 1, first));
+  if (mid + 1 !== p.page) {
+    p.page = mid + 1;
+    const h3 = p.el.querySelector(".bar h3");
+    if (h3) h3.textContent = `${p.def.title} · ${p.page}/${p.pages}`;
+  }
+}
 
 async function openPdfPanel(root, rel, name) {
   const el = document.createElement("div");
   el.className = "panel pdfview";
   el.innerHTML = `<div class="bar"><h3>${escT(name)}</h3></div>` +
-                 `<div class="body"><div class="scroll"><canvas></canvas></div></div>`;
+                 `<div class="body"><div class="scroll"></div></div>`;
   BEHIND.appendChild(el);
   const p = { el, id: UID++, type: "panel",
               def: { root, rel, title: name, ptype: "pdf", file: root + "/" + rel },
@@ -2518,27 +2615,19 @@ async function openPdfPanel(root, rel, name) {
               grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null,
               scrollY: 0, body: el.querySelector(".scroll"), page: 1, pages: 0 };
   items.push(p);
-  pdfShowPage(p, 1);
+  await pdfBuildStrip(p);
   return p;
 }
 
-async function pdfShowPage(p, n) {
-  const canvas = p.el.querySelector("canvas");
-  if (!canvas) return;
-  const res = await pdfDrawPage(canvas, p.id, p.def.root, p.def.rel, n);
-  const h3 = p.el.querySelector(".bar h3");
-  if (res) {
-    p.page = res.page; p.pages = res.pages;
-    if (h3) h3.textContent = `${p.def.title} · ${p.page}/${p.pages}`;
-  } else if (h3) {
-    h3.textContent = p.def.title + " — couldn't load";
-  }
-}
-
+// scroll_note / the assistant: sets a target scrollY and lets the physics
+// glide (sTarget) carry it there — no more discrete page swap (Task 18)
 function pdfGoPage(p, dir) {
-  if (!p || p.def.ptype !== "pdf") return false;
-  const n = dir === "top" ? 1 : (p.page || 1) + (dir === "up" ? -1 : 1);
-  pdfShowPage(p, n);
+  if (!p || p.def.ptype !== "pdf" || !p.body) return false;
+  p.sVel = 0;                          // an explicit jump beats any coast
+  const box = p.body.parentElement.clientHeight;
+  const maxS = Math.max(0, p.body.offsetHeight - box + 40);
+  p.sTarget = dir === "top" ? 0 : Math.min(maxS, Math.max(0,
+    (p.sTarget ?? p.scrollY ?? 0) + (dir === "up" ? -1 : 1) * box * 0.8));
   return true;
 }
 
@@ -3152,6 +3241,10 @@ function beginGrab(c, i, cur) {
         c.mode = "scroll"; c.barGrab = false;
         c.scroll0 = c.scrollY || 0; c.grabY0 = cur.y;
         c.holdX = cur.x; c.holdY = cur.y; c.holdT = performance.now();
+        // Task 18: catching a moving document stops it dead — the grab
+        // is the one moment scrollY changes owner from momentum/glide
+        // back to the hand, so both other owners die right here.
+        c.sVel = 0; c.sTarget = null;
       }
       c.tapX = cur.x; c.tapY = cur.y;   // tap discrimination
     } else if (c.type === "model") {
@@ -3217,6 +3310,29 @@ function endGrab(c, i, cur) {
     }
     const h = cur.history;
     c.hch = 0;                          // hold-charge / movable glow ends
+    // Task 18: MOMENTUM — a release while still in "scroll" mode (never
+    // promoted to a carry) keeps going. Same peak-velocity-over-~220ms
+    // idea the fling below uses, just on the hand's Y and translated
+    // through the same gain the drag itself used, so the coast picks up
+    // exactly where the finger left off — no visible seam at release.
+    // The >=120ms grip guard matches the fling's phantom-pinch guard.
+    if ((c.type === "panel" || c.type === "browser") && c.mode === "scroll" &&
+        c.body && h.length >= 2) {
+      const scrollGripMs = performance.now() - (cur.grabT || 0);
+      if (scrollGripMs >= 120) {
+        const tEnd = h[h.length - 1].t;
+        let vy = 0, pk = 0;
+        for (let k = 0; k + 1 < h.length; k++) {
+          const a2 = h[k], b2 = h[Math.min(k + 2, h.length - 1)];
+          if (a2.t < tEnd - 220 || b2.t <= a2.t) continue;
+          const d2 = (b2.t - a2.t) / 1000;
+          const y2 = (b2.y - a2.y) / d2;
+          if (Math.abs(y2) > Math.abs(pk)) { pk = y2; vy = y2; }
+        }
+        const sVel = -vy * TUNE.scroll.gain;   // same sign convention as the drag math
+        c.sVel = Math.abs(sVel) >= TUNE.scroll.minFlick ? sVel : 0;
+      }
+    }
     // shelf v3: a quick, near-still release on a browser row = the TAP
     // (folders unfold, notes open, props stage, widgets summon)
     if (c.type === "browser" && c.mode === "scroll") {
@@ -3533,10 +3649,33 @@ function physics(dt) {
         if (p >= 1) c.anim = null;
       }
     }
-    if (c.sTarget != null && c.body) {  // smooth page glide
+    // Task 18: scrollY has three possible owners and only one may write it
+    // in a given tick — the drag (held.mode==="scroll", above in tick())
+    // writes it directly and is why both branches below also require
+    // !c.grabbedBy.length; sTarget (the assistant's glide) always wins
+    // over sVel (momentum) when both are somehow set, and a fresh grab
+    // (beginGrab) zeroes both so the hand always wins over either.
+    if (c.sTarget != null && c.body) {  // smooth page glide — assistant-driven
       c.scrollY = (c.scrollY || 0) + (c.sTarget - c.scrollY) * Math.min(1, dt * 8);
       if (Math.abs(c.sTarget - c.scrollY) < 1) { c.scrollY = c.sTarget; c.sTarget = null; }
       c.body.style.transform = `translateY(${-c.scrollY}px)`;
+    } else if (c.sVel && c.body && !c.grabbedBy.length) {  // momentum coast after release
+      const box = c.body.parentElement.clientHeight;
+      const maxS = Math.max(0, c.body.offsetHeight - box + 40);
+      const ny = c.scrollY + c.sVel * dt;
+      c.scrollY = Math.min(maxS, Math.max(0, ny));
+      if (ny < 0 || ny > maxS) c.sVel = 0;          // hit an end — stop dead, no bounce
+      else {
+        c.sVel *= Math.pow(TUNE.scroll.friction, dt);
+        if (Math.abs(c.sVel) < TUNE.scroll.stop) c.sVel = 0;
+      }
+      c.body.style.transform = `translateY(${-c.scrollY}px)`;
+    }
+    // a PDF's lazy-render window follows scrollY regardless of which of
+    // the three owners just moved it (drag, glide, or momentum)
+    if (c.def && c.def.ptype === "pdf" && c.pdfMeta && c.scrollY !== c._pdfSyncY) {
+      c._pdfSyncY = c.scrollY;
+      pdfSyncVisible(c);
     }
     if (c.flying) {
       c.x += c.vx * dt; c.y += c.vy * dt;
@@ -3798,6 +3937,16 @@ async function restoreBoard() {
                  s.proot != null && s.prel) {
         if (!(await fileExists(fileURL(s.proot, s.prel)))) continue;
         it = await openPdfPanel(s.proot, s.prel, s.title);
+        // Task 18: bring it back near where it was left, not page 1 — pg
+        // is the page that covered the viewport's midline when last
+        // saved (see pushState); jump straight there, no glide, this is
+        // a cold restore, not a live scroll.
+        if (it && s.pg && it.pdfMeta && it.pdfMeta[s.pg - 1]) {
+          it.scrollY = it.pdfMeta[s.pg - 1].top;
+          it.body.style.transform = `translateY(${-it.scrollY}px)`;
+          it._pdfSyncY = -1;
+          pdfSyncVisible(it);
+        }
       } else if (s.type === "panel" && s.ptype === "text" && s.fsrc) {
         if (!(await fileExists(s.fsrc))) continue;
         it = await openTextPanel(s.fsrc, s.title);
@@ -4929,39 +5078,16 @@ async function boot() {
             // v3 (Jared's ruling 2026-08-14): the two-hand TWIST-ROLL is
             // dead — two hands = carry + SCALE only; all rotation lives
             // in the one-hand hold-still latch.
-          } else if (held.mode === "scroll" && held.grabbedBy[0] === i &&
-                     held.type === "panel" && held.def.ptype === "pdf") {
-            // THE FILES BROWSER (Task 16): the SAME drag that scrolls a
-            // note TURNS PAGES on a PDF panel — a threshold-crossing
-            // re-anchors instead of a continuous scrollY, everything
-            // else (the hold-to-move promotion) is untouched
-            const dy = cur.y - held.grabY0;
-            if (Math.abs(dy) > 90) {
-              pdfGoPage(held, dy < 0 ? "down" : "up");
-              held.grabY0 = cur.y;
-            }
-            const pdrift = Math.hypot(cur.x - held.holdX, cur.y - held.holdY);
-            if (pdrift > 80) {
-              held.holdX = cur.x; held.holdY = cur.y;
-              held.holdT = performance.now(); held.hch = 0;
-              held.grabY0 = cur.y;
-            } else {
-              const pp = Math.min((performance.now() - held.holdT) / 1000, 1);
-              held.hch = pp;
-              if (pp >= 1) {
-                held.mode = "move";
-                held.ox = held.x - cur.x; held.oy = held.y - cur.y;
-                held.holdX = cur.x; held.holdY = cur.y;
-                held.holdT = performance.now(); held.hch = 0.6;
-              }
-            }
           } else if (held.mode === "scroll" && held.grabbedBy[0] === i) {
             // scrolling (content follows the finger) + the hold-to-move
-            // promotion timer running underneath
+            // promotion timer running underneath — Task 18: a PDF panel
+            // is now just another continuous .body, same as a note/text
+            // panel or a browser pane, so it falls into this one path
+            // (the old page-turn threshold branch is gone entirely)
             const box = held.body.parentElement.clientHeight;
             const maxS = Math.max(0, held.body.offsetHeight - box + 40);
             held.scrollY = Math.min(maxS, Math.max(0,
-              held.scroll0 - (cur.y - held.grabY0) * 1.4));
+              held.scroll0 - (cur.y - held.grabY0) * TUNE.scroll.gain));
             held.body.style.transform = `translateY(${-held.scrollY}px)`;
             const drift = Math.hypot(cur.x - held.holdX, cur.y - held.holdY);
             if (drift > 80) {
@@ -5458,7 +5584,7 @@ async function renderLoop() {
           if (it.ptype === "pdf") {
             el.className = "panel pdfview";
             el.innerHTML = `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
-                           `<div class="body"><div class="scroll"><canvas></canvas></div></div>`;
+                           `<div class="body"><div class="scroll"></div></div>`;
           } else {
             el.className = "panel" + (it.ptype === "text" ? " textview" : "");
             el.innerHTML =
@@ -5480,7 +5606,18 @@ async function renderLoop() {
             .then(sc => { ri.msc = sc; });
         if (it.type === "widget" && it.w === "ring")
           RINGS.set(it.id, ringCanvas(el));   // the ring animates locally
-        if (it.ptype === "pdf") ri.pdfPage = 0;   // force the first draw below
+        if (it.ptype === "pdf") {
+          // Task 18: the render mirror builds the SAME continuous strip
+          // the tracker does (pdfBuildStrip/pdfSyncVisible are shared —
+          // ri just needs to look enough like a panel item: .id, .def,
+          // .body, .scrollY) and lazy-renders around the mirrored
+          // scroll fraction below instead of drawing one page on `pg`.
+          ri.id = it.id;
+          ri.def = { root: it.proot, rel: it.prel, title: it.title };
+          ri.body = el.querySelector(".scroll");
+          ri.scrollY = 0; ri.page = 0; ri.pages = 0; ri.isPdf = true;
+          pdfBuildStrip(ri);
+        }
         if (it.type === "desk") {
           const dimg = el.querySelector("img");
           ri._deskT = setInterval(() => {
@@ -5502,6 +5639,13 @@ async function renderLoop() {
         const rmax = Math.max(0, sc.offsetHeight - rbox + 40);
         ri.sy = (ri.sy || 0) + (it.sy * rmax - (ri.sy || 0)) * 0.5;
         sc.style.transform = `translateY(${-ri.sy}px)`;
+        // Task 18: drive the same lazy-render window off the lerped
+        // scroll position, so the mirror never renders more of the
+        // strip than is actually near what's on screen
+        if (it.ptype === "pdf" && ri.pdfMeta) {
+          ri.scrollY = ri.sy;
+          pdfSyncVisible(ri);
+        }
       }
       if (it.type === "widget" && it.w === "ring") {
         const rsc = RINGS.get(it.id);
@@ -5517,12 +5661,12 @@ async function renderLoop() {
         flashRow(ri.el.querySelector(".scroll"), it.fi);
       }
       if (it.ptype === "pdf" && it.pg && it.pg !== ri.pdfPage) {
+        // the strip itself is already rendering off ri.scrollY above —
+        // this just mirrors the live "N/M" the tracker derived from its
+        // own scroll position (pushState's pg, see pdfSyncVisible)
         ri.pdfPage = it.pg;
-        const canvas = ri.el.querySelector("canvas");
-        if (canvas) pdfDrawPage(canvas, it.id, it.proot, it.prel, it.pg).then(res => {
-          const h3 = ri.el.querySelector(".bar h3");
-          if (res && h3) h3.textContent = `${it.title} · ${res.page}/${res.pages}`;
-        });
+        const h3 = ri.el.querySelector(".bar h3");
+        if (h3) h3.textContent = `${it.title} · ${it.pg}/${it.pgs}`;
       }
       if (it.type === "model" && ri.msc && ri.msc.group) {
         if (ri.mry == null) { ri.mrx = it.rx || 0; ri.mry = it.ry || 0;
@@ -5568,7 +5712,7 @@ async function renderLoop() {
     Object.keys(rItems).forEach(k => {
       if (!ids.has(+k)) {
         if (rItems[k].msc) disposeScene(rItems[k].msc);
-        if (rItems[k].pdfPage != null) pdfCleanup(+k);
+        if (rItems[k].isPdf) pdfCleanup(+k);
         if (rItems[k]._deskT) clearInterval(rItems[k]._deskT);
         rItems[k].el.remove(); delete rItems[k]; } });
     renderRings();               // the ring draws its own frames
