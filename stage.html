@@ -1966,6 +1966,28 @@ function applyCmds(cmds) {
     } else if (c.a === "enroll") {          // forget the owner, re-arm the auto window
       fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) })
         .then(() => { LOCK.owner = null; LOCK.enrolled = false; LOCK.enroll = null; LOCK.state = {}; toast("owner forgotten — look at the camera alone for 3s to enroll", 4000); }).catch(() => {});
+    } else if (c.a === "mirror") {
+      // THE MIRROR DIAL, WITHOUT KEYBOARD FOCUS (Task 26). M only works
+      // while the board holds focus, and this i3 is `focus_follows_mouse
+      // yes` — so the moment a hand-driven pointer crosses another
+      // window, the board loses focus and M goes dead. Since the board is
+      // now full screen and click-through, that happens constantly. This
+      // command reaches the dial regardless of focus:
+      //   bin/board.sh '{"a":"mirror"}'          cycle one step
+      //   bin/board.sh '{"a":"mirror","v":0.35}' set it exactly
+      // Bind the first form to an i3 key and the dial is always one press
+      // away. v is snapped to the nearest rung of the same ladder M uses,
+      // so both paths can never disagree about where the dial is.
+      if (typeof c.v === "number" && isFinite(c.v)) {
+        let best = 0, bd = 9;
+        MIRROR_STEPS.forEach((val, i) => {
+          const d = Math.abs(val - c.v); if (d < bd) { bd = d; best = i; }
+        });
+        MIRROR_I = best;
+      } else {
+        MIRROR_I = (MIRROR_I - 1 + MIRROR_STEPS.length) % MIRROR_STEPS.length;
+      }
+      applyMirror(true);
     } else if (c.a === "guest") {           // {"allow":1} approves the current candidate(s), {"allow":0} revokes all
       if (c.allow === 0 || c.allow === "0" || c.allow === false) { for (const id of Object.keys(LOCK.approvals)) revokeGuest(id); }
       else if (LOCK.verdict) { for (const id of LOCK.verdict.guestCandidates) approveGuest(id, "cmd"); }
