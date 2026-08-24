@@ -705,6 +705,8 @@ if (MODE === "overlay") {
 // body.hud.overlay #cam) still keys off both classes, so mirror mode is
 // unaffected by it — the camera is already the background there.
 const HUD_MODE = Q.get("hud") === "1";
+// a fresh id per page load — see the `page` field on the heartbeat
+const PAGE_ID = Math.random().toString(36).slice(2, 8);
 if (HUD_MODE) document.body.classList.add("hud");
 // THE MIRROR DIAL: how much of the camera shows behind the glass in HUD
 // mode. Starts at tuning hud.mirror; M cycles it live so the feel can be
@@ -5794,6 +5796,15 @@ function pushState(now) {
             since: LOCK.since || 0, enrolled: LOCK.enrolled, ident: IDENT ? IDENT.mode : "none" },
     // Task 20: lets the controller verify the HUD's live state (armed or
     // not) without a camera — just by reading this heartbeat.
+    // WHO POSTED THIS (Task 23). Every open page POSTs to the same
+    // /state and the last writer wins, so a heartbeat carried no way to
+    // tell WHICH page it came from. That cost two confused measurements
+    // in one session — a headless test page's numbers were read as the
+    // real board's, and then the real board's were read as the test
+    // page's. `page` is a per-tab random id plus the mode it is running
+    // in: enough to attribute a sample, and it changes every reload so
+    // it identifies nothing but the tab.
+    page: { id: PAGE_ID, mode: MODE, hud: HUD_MODE, role: Q.get("role") || "tracker" },
     hud: { on: HUD_MODE, armed: HUD.armed, hz: (PTR_CFG && PTR_CFG.rateHz) || 90 },
     faces: FACES ? FACES.list().filter(f => f.seenNow).map(f => ({
       id: f.id, role: (LOCK.verdict && LOCK.verdict.faceRole[f.id]) || "unknown",
