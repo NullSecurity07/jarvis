@@ -248,8 +248,31 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      three.js scene). */
   .panel.desk { width:640px; height:460px; }
   .panel.desk .body { display:flex; align-items:center; justify-content:center;
-                      padding:0; overflow:hidden; background:#04100e; }
+                      padding:0; overflow:hidden; background:#04100e; position:relative; }
   .panel.desk .body img { display:block; max-width:100%; max-height:100%; }
+  /* THE DESKS TELL THE TRUTH (Task 19): every card says exactly what it's
+     showing — never a bare pixel stream the viewer has to trust blind. */
+  .panel.desk .bar h3 { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+                        white-space:nowrap; margin-right:8px; }
+  .panel.desk .badge { flex:none; font:11px "SF Mono",Menlo,monospace; letter-spacing:0.05em;
+                       text-transform:uppercase; padding:3px 8px; border-radius:4px;
+                       border:1px solid rgba(111,229,214,0.5); color:#8ff0e4; opacity:0.9;
+                       white-space:nowrap; }
+  .panel.desk .badge.live { color:#7dffb0; border-color:rgba(125,255,176,0.65); }
+  .panel.desk .badge.hidden, .panel.desk .badge.none
+    { color:#b9c2c0; border-color:rgba(185,194,192,0.4); opacity:0.85; }
+  .panel.desk .refresh { flex:none; font:11px "SF Mono",Menlo,monospace; letter-spacing:0.05em;
+                         text-transform:uppercase; padding:3px 8px; border-radius:4px;
+                         margin-left:6px; border:1px solid rgba(111,229,214,0.5);
+                         color:#8ff0e4; opacity:0.85; }
+  /* the 409 case: nothing was ever captured — an empty glass frame with
+     the title/class already in the bar, NEVER a black square or a stale
+     bitmap that could be mistaken for a real view */
+  .panel.desk.nolook .body img { display:none; }
+  .panel.desk .nolook-msg { display:none; text-align:center; padding:24px;
+                            color:#7fa39c; font:13px "SF Mono",Menlo,monospace;
+                            letter-spacing:0.03em; }
+  .panel.desk.nolook .nolook-msg { display:block; }
   .cursor { position:absolute; width:28px; height:28px; margin:-14px 0 0 -14px;
             border-radius:50%; border:2.5px solid rgba(111,229,214,0.9);
             background:rgba(111,229,214,0.12); pointer-events:none; z-index:999; }
@@ -2193,10 +2216,16 @@ function stageDesk(xid, title) {
   }
   const el = document.createElement("div");
   el.className = "panel desk";
-  el.innerHTML = `<div class="bar"><h3>${escT(title || "DESKTOP")}</h3></div>` +
-                 `<div class="body"><img alt=""></div>`;
+  // Task 19: the badge starts neutral ("…"), never a guessed "LIVE" — the
+  // desksHealthCheck() call below lands (usually within one localhost
+  // round-trip) before the card is even visible, so this rarely shows for
+  // longer than the fade-in, and it never asserts something unverified.
+  el.innerHTML = `<div class="bar"><h3>${escT(title || "DESKTOP")}</h3>` +
+                 `<span class="badge">…</span>` +
+                 `<span class="refresh" style="display:none">refresh</span></div>` +
+                 `<div class="body"><img alt=""><div class="nolook-msg">no live view yet</div></div>`;
   BEHIND.appendChild(el);
-  const it = { el, id: UID++, type: "desk", pinned: false,
+  const it = { el, id: UID++, type: "desk", pinned: false, badge: null,
     def: { title: title || "", file: "", xid, src: "/desks/stream?xid=" + xid },
     x: innerWidth * 0.5, y: innerHeight * 0.42, scale: 1, vx: 0, vy: 0,
     grabbedBy: [], ox: 0, oy: 0, flying: false, stretch: null };
@@ -2221,6 +2250,7 @@ function stageDesk(xid, title) {
   img.src = it.def.src;
   items.push(it);
   retileDesks();
+  desksHealthCheck();   // Task 19: badge lands right away, not on the next 4s tick
   return it;
 }
 
@@ -2299,9 +2329,65 @@ async function desksHealthCheck() {
       toast(`"${it.def.title || "a live desktop"}" closed`, 2200);
       killItem(it);
       closedAny = true;
+      return;
     }
+    // THE DESKS TELL THE TRUTH (Task 19): the same /desks poll that
+    // already runs every 4s to detect a closed window also carries
+    // capturable + cacheAgeMs — free badge data, no extra request.
+    desksSetBadge(it, d.wins.find(w => w.xid === it.def.xid));
   });
   if (closedAny) retileDesks();
+}
+
+// Builds the badge state a card should show from one /desks window entry,
+// then applies it to the DOM. Shared by the tracker (desksHealthCheck,
+// deskPeek) and the on-air mirror (desksMirrorSync) — see desksApplyBadge.
+function desksSetBadge(it, win) {
+  if (!win) return;
+  if (win.capturable) it.badge = { state: "live" };
+  else if (win.cacheAgeMs == null) it.badge = { state: "none", ws: win.ws };
+  else it.badge = { state: "hidden", ws: win.ws, ageMs: win.cacheAgeMs,
+                    syncedAt: performance.now() };
+  desksApplyBadge(it);
+}
+
+function humanAge(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + "s";
+  const m = Math.round(s / 60);
+  if (m < 60) return m + "m";
+  return Math.round(m / 60) + "h";
+}
+
+// Paints one desk card's badge (LIVE / HIDDEN · Nm ago / HIDDEN · no view
+// yet) from it.badge, toggles the refresh affordance and the empty-frame
+// "nolook" state. Runs on the tracker (every desksHealthCheck sync + a 1s
+// local ticker so the age visibly advances) AND on the on-air mirror
+// (informational only — desksMirrorSync never shows a .refresh button,
+// since peek is on-demand-tap-only and never belongs on the broadcast
+// surface). Safe to call with no badge yet (card just staged, first sync
+// hasn't landed) — leaves the default LIVE markup in place briefly rather
+// than flashing an unknown state.
+function desksApplyBadge(it) {
+  const b = it.badge;
+  if (!b) return;
+  const bEl = it.el.querySelector(".badge");
+  const rEl = it.el.querySelector(".refresh");
+  if (!bEl) return;
+  if (b.state === "live") {
+    bEl.textContent = "LIVE"; bEl.className = "badge live";
+    it.el.classList.remove("nolook");
+    if (rEl) rEl.style.display = "none";
+  } else if (b.state === "none") {
+    bEl.textContent = "HIDDEN · no view yet"; bEl.className = "badge none";
+    it.el.classList.add("nolook");
+    if (rEl) rEl.style.display = "";
+  } else {
+    const ms = b.ageMs + Math.max(0, performance.now() - b.syncedAt);
+    bEl.textContent = "HIDDEN · " + humanAge(ms) + " ago"; bEl.className = "badge hidden";
+    it.el.classList.remove("nolook");
+    if (rEl) rEl.style.display = "";
+  }
 }
 
 // The row's small focus affordance AND a live card's double-tapped bar
@@ -2346,6 +2432,25 @@ async function deskFocus(xid) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ a: "focus", cid: win.cid }) });
   } catch (e) {}
+}
+
+// THE DESKS' refresh (Task 19): the ONLY way to update a HIDDEN window's
+// frame — maim cannot read one live at all (see server.py's _desks_capture
+// docstring), so this is a real workspace round-trip: switch to it, let it
+// paint, capture, switch straight back (server-side, /desks/cmd "peek").
+// On demand only — a tap on a card's .refresh badge, never automatic,
+// never on a timer, never called from the render mirror — because it
+// costs a real flicker on the user's actual screen.
+async function deskPeek(it) {
+  if (!it || !it.def || it.def.xid == null) return;
+  const ws = it.badge && it.badge.ws;
+  toast(`peeking at ws ${ws != null ? ws : "?"} — the screen will flicker`, 2200);
+  try {
+    await fetch("/desks/cmd", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: "peek", xid: it.def.xid }) });
+  } catch (e) {}
+  desksHealthCheck();   // pick up the fresh cache age now, not on the next 4s tick
 }
 
 // minimal safe markdown-ish render: escape all HTML, then style headers/bold
@@ -3362,16 +3467,30 @@ function endGrab(c, i, cur) {
       const dTrav = Math.hypot(cur.x - (c.tapX || cur.x),
                                cur.y - (c.tapY || cur.y));
       if (dMs < 350 && dTrav < 24) {
-        const tapNow = performance.now();
-        if (tapNow - (c._lastBarTap || 0) < 400) {
-          c._lastBarTap = 0;
-          deskFocus(c.def.xid);
+        // THE DESKS' refresh affordance (Task 19): a dedicated small tap
+        // target, checked the same way browserTap's .bfocus is (a fat
+        // target within the SAME discriminated release, never a gesture
+        // of its own) — only reachable when the badge shows it (a HIDDEN
+        // card), so it can never fire on a LIVE card and never competes
+        // with the close/double-tap-focus timing below.
+        const rEl = c.el.querySelector(".refresh");
+        const rR = rEl && rEl.offsetParent && rEl.getBoundingClientRect();
+        const onRefresh = rR && cur.x >= rR.left && cur.x <= rR.right &&
+                          cur.y >= rR.top && cur.y <= rR.bottom;
+        if (onRefresh) {
+          deskPeek(c);
         } else {
-          c._lastBarTap = tapNow;
-          setTimeout(() => {
-            if (c._lastBarTap && performance.now() - c._lastBarTap >= 400 &&
-                c.el.isConnected) { killItem(c); retileDesks(); }
-          }, 420);
+          const tapNow = performance.now();
+          if (tapNow - (c._lastBarTap || 0) < 400) {
+            c._lastBarTap = 0;
+            deskFocus(c.def.xid);
+          } else {
+            c._lastBarTap = tapNow;
+            setTimeout(() => {
+              if (c._lastBarTap && performance.now() - c._lastBarTap >= 400 &&
+                  c.el.isConnected) { killItem(c); retileDesks(); }
+            }, 420);
+          }
         }
       }
       c.barGrab = false;
@@ -5577,8 +5696,14 @@ async function renderLoop() {
           // per-xid capture cache instead of a second persistent loop.
           el = document.createElement("div");
           el.className = "panel desk";
-          el.innerHTML = `<div class="bar"><h3>${escT(it.title)}</h3></div>` +
-                         `<div class="body"><img alt=""></div>`;
+          // THE DESKS TELL THE TRUTH (Task 19): the badge here is
+          // informational ONLY — no .refresh markup, ever, so peek can
+          // never be triggered from the broadcast surface (see
+          // desksMirrorSync below, which paints this from its own /desks
+          // poll — the mirror shares no state with the tracker's items).
+          el.innerHTML = `<div class="bar"><h3>${escT(it.title)}</h3>` +
+                         `<span class="badge">…</span></div>` +
+                         `<div class="body"><img alt=""><div class="nolook-msg">no live view yet</div></div>`;
         } else {
           el = document.createElement("div");
           if (it.ptype === "pdf") {
@@ -5619,10 +5744,12 @@ async function renderLoop() {
           pdfBuildStrip(ri);
         }
         if (it.type === "desk") {
+          ri.dxid = it.dxid;   // Task 19: desksMirrorSync's join key
           const dimg = el.querySelector("img");
           ri._deskT = setInterval(() => {
             dimg.src = "/desks/shot?xid=" + it.dxid + "&t=" + Date.now();
           }, 500);
+          desksMirrorSync();   // badge lands right away, not on the next 4s tick
         }
       }
       ri.x += (rx(it.x) * innerWidth - ri.x) * 0.5;
@@ -5725,6 +5852,23 @@ async function renderLoop() {
   requestAnimationFrame(renderLoop);
 }
 
+// THE DESKS TELL THE TRUTH, on air too (Task 19): the render/OBS mirror
+// shares no `items` state with the tracker — it only mirrors pixels via
+// /desks/shot polling (see the "desk" branch above) — so it runs its own
+// lightweight /desks poll for badge data, joined on ri.dxid. Informational
+// only: the markup here never includes a .refresh button, so peek can
+// never be triggered from the broadcast surface (see the desk-card markup
+// above and desksApplyBadge, both shared with the tracker).
+async function desksMirrorSync() {
+  const live = Object.values(rItems).filter(r => r.dxid != null && r.el.isConnected);
+  if (!live.length) return;
+  let d;
+  try { const r = await fetch("/desks"); if (r.ok) d = await r.json(); }
+  catch (e) { return; }
+  if (!d) return;
+  live.forEach(ri => desksSetBadge(ri, (d.wins || []).find(w => w.xid === ri.dxid)));
+}
+
 if (ROLE === "render") {
   document.body.classList.add("overlay");
   document.body.classList.add("on-air");
@@ -5737,6 +5881,7 @@ if (ROLE === "render") {
   const h = document.getElementById("hint");
   if (h) h.remove();
   renderLoop();
+  setInterval(desksMirrorSync, 4000);   // Task 19
 } else {
   boot().catch(e => {
     document.getElementById("boot").innerHTML =
@@ -5744,6 +5889,13 @@ if (ROLE === "render") {
   });
   setInterval(desksHealthCheck, 4000);   // THE DESKS (fix round 2)
 }
+// Task 19: ticks a HIDDEN badge's age between the 4s /desks syncs above
+// (both roles) so it visibly counts up instead of jumping in 4s steps.
+setInterval(() => {
+  (ROLE === "render" ? Object.values(rItems) : items)
+    .filter(x => x.el && x.el.isConnected && x.badge)
+    .forEach(desksApplyBadge);
+}, 1000);
 </script>
 </body>
 </html>
