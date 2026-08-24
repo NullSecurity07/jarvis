@@ -73,6 +73,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
       inset 0 1px 0 rgba(191,255,245,0.35); }
   #cam { position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
          transform:scaleX(-1); }
+  /* THE MIRROR DIAL, IN MIRROR MODE (Task 25). M cycled --mirror and
+     toasted a percentage, but the ONLY rule reading --mirror was the
+     overlay one below, which needs body.overlay — a class mirror mode
+     never has. So M silently did nothing in the mode the board actually
+     runs in, including when F grows the panel, which is where the user
+     hit it. Here the camera IS the panel's background, so the dial dims
+     it and the glass reads over a darker room. Defaults to 1: untouched
+     unless you cycle it. */
+  body.hud:not(.overlay):not(.keybg) #cam {
+         opacity:var(--mirror, 1); transition:opacity .25s ease; }
   body.overlay #cam, body.keybg #cam {
          width:2px; height:2px; opacity:0.01; pointer-events:none; }
   /* THE GHOST MIRROR (the user, after the first HUD test: "i liked how the
@@ -712,9 +722,16 @@ if (HUD_MODE) document.body.classList.add("hud");
 // mode. Starts at tuning hud.mirror; M cycles it live so the feel can be
 // dialled in without a reload, and the choice sticks for next launch.
 const MIRROR_STEPS = [0, 0.2, 0.35, 0.6, 1];
+// Per-mode, both the default and what gets remembered: overlay wants a
+// translucent GHOST over the desktop (tuning hud.mirror, 0.35), mirror
+// wants the camera at FULL strength unless you dim it. One shared key
+// would have let an overlay session silently dim the mirror panel to 35%
+// on its next launch.
+const MIRROR_KEY = "jarvis-mirror-" + (MODE === "overlay" ? "overlay" : "mirror");
 let MIRROR_I = (() => {
-  const saved = parseFloat(localStorage.getItem("jarvis-mirror"));
-  const want = Number.isFinite(saved) ? saved : ((TUNE.hud && TUNE.hud.mirror) ?? 0.35);
+  const saved = parseFloat(localStorage.getItem(MIRROR_KEY));
+  const want = Number.isFinite(saved) ? saved
+             : (MODE === "overlay" ? ((TUNE.hud && TUNE.hud.mirror) ?? 0.35) : 1);
   let best = 0, bd = 9;
   MIRROR_STEPS.forEach((v, i) => { const d = Math.abs(v - want); if (d < bd) { bd = d; best = i; } });
   return best;
@@ -722,14 +739,21 @@ let MIRROR_I = (() => {
 function applyMirror(announce) {
   const v = MIRROR_STEPS[MIRROR_I];
   document.documentElement.style.setProperty("--mirror", v);
-  try { localStorage.setItem("jarvis-mirror", String(v)); } catch (_) {}
-  if (announce) toast(v === 0 ? "mirror off — glass on your desktop"
+  try { localStorage.setItem(MIRROR_KEY, String(v)); } catch (_) {}
+  if (announce) toast(v === 0 ? (MODE === "overlay" ? "mirror off — glass on your desktop"
+                                                    : "camera off — glass only")
                               : `mirror ${Math.round(v * 100)}%`, 1200);
 }
 if (HUD_MODE) {
   applyMirror(false);
   addEventListener("keydown", e => {
-    if (e.key === "m" || e.key === "M") { MIRROR_I = (MIRROR_I + 1) % MIRROR_STEPS.length; applyMirror(true); }
+    // steps DOWN through the ladder: from a full-strength camera the
+    // first press should dim it a little, not switch it off (which is
+    // what incrementing did from the top of the ladder).
+    if (e.key === "m" || e.key === "M") {
+      MIRROR_I = (MIRROR_I - 1 + MIRROR_STEPS.length) % MIRROR_STEPS.length;
+      applyMirror(true);
+    }
   });
 }
 if (MODE === "key") {
