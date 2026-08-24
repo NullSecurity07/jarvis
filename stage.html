@@ -786,18 +786,35 @@ async function deskClick(hit, button) {
 // Thumb distance is measured to the index KNUCKLE (landmark 5), not to
 // any fingertip: it stays far from the tip-to-tip distance the board's
 // own pinch test uses, so a click can never read as a pinch.
+// A TAP IS A DIP, NOT A DISTANCE (Task 32). Two fittings of an absolute
+// threshold both failed, and the logs show why they had to: the thumb's
+// resting distance is not one number. Measured on this user's hand, the
+// SAME resting thumb reads 0.60 span units while pointing and 0.26 in a
+// fist. Any fixed threshold is above rest in one pose and below it in the
+// other — which is exactly what happened, twice, and why the button ended
+// up permanently held both times (92% and 98% of frames).
+//
+// So a click is no longer "the thumb is closer than X". It is a DIP: the
+// thumb moving decisively in relative to where it has been sitting, then
+// coming back out. The baseline follows the hand slowly, so it re-learns
+// itself for whatever pose you are in, and only a deliberate movement
+// away from that baseline counts.
+//
+// Three more gates, all aimed at "too sensitive and easy to misinterpret":
+//   - the index must actually be extended (no clicking from a fist)
+//   - the hand must be reasonably still (a moving hand changes these
+//     distances on its own, and that was firing drags mid-gesture)
+//   - a cooldown after each click, so one press cannot chatter into many
 const PTR_G = {
-  // FITTED, not guessed (168 armed samples of this user's hand): the
-  // resting thumb sits at 0.60 span units with a hard mode there (94 of
-  // 168 samples in 0.6-0.7), and a deliberate press lands in 0.14-0.45.
-  // The old tapIn of 0.62 sat ABOVE the resting position, so 92% of all
-  // armed frames read as button-DOWN — the button was permanently held,
-  // every press instantly became a drag, and no click could ever fire.
-  // 0.45/0.55 straddles the gap between press and rest.
-  tapIn: 0.45, tapOut: 0.55,   // thumb-to-index-knuckle, in span units
-  holdMs: 350,                 // contact longer than this = drag, not click
-  doubleMs: 400,               // two taps inside this = the app sees a double
-  scrollPxPerClick: 38,        // hand travel per wheel click
+  dipIn: 0.68,        // press when the distance falls to this fraction of baseline
+  dipOut: 0.82,       // release when it comes back above this fraction
+  minMs: 70,          // shorter than this is noise, not a tap
+  holdMs: 700,        // longer than this is a DRAG (was 350 — too easy to trip)
+  cooldownMs: 320,    // no second click may start inside this
+  stillPx: 55,        // hand speed ceiling for a tap, px/frame-ish
+  doubleMs: 420,      // two taps inside this = the app sees a double
+  scrollPxPerClick: 38,
+  baseAlpha: 0.06,    // how fast the resting baseline follows the hand
 };
 
 async function ptrSend(body) {
@@ -859,7 +876,7 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
     cur.scrollY0 = null;
   }
 
-  // ---- THE BUTTON: the thumb, moving toward the index knuckle
+  // ---- THE BUTTON: a DIP of the thumb, relative to its own baseline
   const nearD = Math.hypot(th.x - lms[5].x, th.y - lms[5].y) / span;
   // Published on the heartbeat so tapIn/tapOut can be fitted to a real
   // hand instead of guessed at: watch it while opening and closing the
@@ -871,9 +888,24 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
   // angle or distance from the lens
   if (wl) HUD.thumbCm = Math.round(1000 * Math.hypot(
     wl[4].x - wl[5].x, wl[4].y - wl[5].y, wl[4].z - wl[5].z)) / 10;
+  // the baseline only learns while the thumb is NOT pressed, so a long
+  // press cannot drag the baseline down and strand the button on
+  if (cur.thBase == null) cur.thBase = nearD;
+  else if (!cur.ptrContact)
+    cur.thBase += (nearD - cur.thBase) * g.baseAlpha;
+
+  // gates: pointing, still, and not inside a cooldown
+  const pointing = !!extArr[0];
+  cur.ptrPointing = pointing;
+  const dx = cur.x - (cur.ptrLastX ?? cur.x), dy = cur.y - (cur.ptrLastY ?? cur.y);
+  cur.ptrLastX = cur.x; cur.ptrLastY = cur.y;
+  const still = Math.hypot(dx, dy) < g.stillPx;
+  const cool = now - (cur.ptrClickT || 0) < g.cooldownMs;
+
   const contact = cur.ptrContact
-    ? nearD < g.tapOut          // already down: hold until it clearly lifts
-    : nearD < g.tapIn;          // not down: needs a firm press to start
+    ? nearD < cur.thBase * g.dipOut          // down: hold until it comes back out
+    : (pointing && still && !cool && nearD < cur.thBase * g.dipIn);
+  HUD.thBase = Math.round(cur.thBase * 100) / 100;
 
   if (contact && !cur.ptrContact) {          // thumb goes down
     cur.ptrContact = button;                 // remember which button it meant
@@ -892,7 +924,8 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
     if (cur.ptrBtn) {                        // end of a drag
       ptrSend({ a: "click", button: cur.ptrBtn, action: "release" });
       cur.ptrBtn = null;
-    } else if (held <= g.holdMs) {           // a tap = a click
+    } else if (held >= g.minMs && held <= g.holdMs) {   // a tap = a click
+      cur.ptrClickT = now;
       ptrSend({ a: "click", button: btn, action: "click" });
       // A DOUBLE IS TWO SINGLES, on purpose: X11 has no "double click"
       // event — every application decides for itself from the gap between
@@ -937,6 +970,11 @@ function hudPointerTick(now) {
     if (nonPinch !== undefined) driveId = nonPinch;
   }
   const cur = cursors[driveId];
+  // ONLY A POINTING HAND DRIVES. With the index folded, "the index tip"
+  // is a knuckle buried in the palm, and the cursor wandered off wherever
+  // that landed — part of why the pointer felt twitchy and unpredictable.
+  // A hand that stops pointing simply leaves the cursor where it was.
+  if (cur.ptrPointing === false) return;
   const rateHz = (PTR_CFG && PTR_CFG.rateHz) || 90;
   if (now - HUD.lastSend.t < 1000 / rateHz) return;
   // window px -> screen px: the overlay is sized to cover the whole
@@ -6399,6 +6437,7 @@ function pushState(now) {
            // reported whether or not a hand is near it, so the sizing can
            // be verified from a headless page instead of a screenshot
            thumbCm: HUD.thumbCm == null ? null : HUD.thumbCm,
+           thBase: HUD.thBase == null ? null : HUD.thBase,
            card: (() => {
              const it = items.find(i => i.type === "desk" && i.el);
              if (!it) return null;

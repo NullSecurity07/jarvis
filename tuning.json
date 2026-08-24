@@ -151,15 +151,19 @@
     "lerp": 0.75,
     "deadPx": 0.6,
     "gesture": {
-      "tapIn": 0.45,
-      "tapOut": 0.55,
-      "holdMs": 350,
-      "doubleMs": 400,
-      "scrollPxPerClick": 38
+      "dipIn": 0.68,
+      "dipOut": 0.82,
+      "minMs": 70,
+      "holdMs": 700,
+      "cooldownMs": 320,
+      "stillPx": 55,
+      "doubleMs": 420,
+      "scrollPxPerClick": 38,
+      "baseAlpha": 0.06
     }
   },
   "desks": {
-    "openFull": true,
+    "openFull": false,
     "_": "THE DESKS on the glass. openFull: the first desk card you open goes FULL SCREEN immediately (bar and frame dropped, body sized to the window's own aspect \u2014 on a 1920x1080 display showing a 1920x1044 window that is 1:1, no resampling). Set false to have desks open tiled on the glass instead, at roughly 70% of native. Toggle either way with Z, or bin/board.sh '{\"a\":\"deskfull\"}' \u2014 which is the dependable one, since the board is click-through and this i3 is focus_follows_mouse, so it often has no keyboard focus."
   }
 }
