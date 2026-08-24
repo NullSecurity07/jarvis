@@ -87,20 +87,28 @@ A `Desks` orb turns the board into a live view of your own machine — tap it an
 ```json
 "desks": {
   "enabled": true,
-  "fps": 4,
-  "minGapMs": 180,
-  "maxStreams": 3,
+  "fps": 10,
+  "minGapMs": 60,
+  "maxStreams": 6,
+  "shrink": 3,
+  "quality": 70,
   "aliveMs": 1500,
   "display": ":0",
   "xauthority": "/run/user/1000/lyxauth"
 }
 ```
 
-`aliveMs` bounds how often a live card's window is re-confirmed to still exist while its captures keep succeeding — a failed capture always confirms right away; this just stops a healthy stream from spawning `i3-msg` every single frame on a board meant to stay up all day.
+`shrink` is an integer box-filter downscale applied before JPEG encoding (`3` turns 1920x1080 into 640x360) and `quality` is the JPEG quality — together they cost about 15 ms and 26 KB per frame, which is what makes ten frames a second across six windows affordable. `aliveMs` bounds how often a live card's window is re-confirmed to still exist while its captures keep succeeding — a failed capture always confirms right away; this just stops a healthy stream from spawning `i3-msg` every single frame on a board meant to stay up all day.
 
-**i3/X11 only, and only the visible workspace is ever actually live.** `maim -i <xid>` captures the screen REGION a window occupies, not the window's own contents — on a workspace that isn't currently visible, that region belongs to whatever workspace IS onscreen, so it would silently hand back the wrong window's pixels. And there's no way around it: i3 unmaps a window the moment its workspace is hidden (`xprop WM_STATE` reports `Withdrawn`), and an unmapped window has no backing pixels for anything — `maim`, `import`, `xwd`, all of them — to read. So the board never even tries: `/desks/shot` and `/desks/stream` only call `maim` for a window whose workspace is currently visible (`capturable` in the `/desks` response). For everything else, a card shows the **last frame that window ever produced**, honestly aged — its badge reads `LIVE` (green) while the workspace is visible, `HIDDEN · Nm ago` (grey) while showing that cached frame, or `HIDDEN · no view yet` with an empty glass frame if nothing was ever captured. The one way to refresh a hidden window is the card's small **refresh** tap: it switches to that workspace, waits for the window to paint, captures, and switches straight back — a real flicker on your actual screen, which is why it's tap-only, never automatic and never on a timer. Missing the `desks` key entirely, or `"enabled": false`, disables the feature completely: every `/desks*` endpoint 404s, and the orb never appears.
+**i3/X11 only. What can be captured is whatever is MAPPED — which is not the same as visible.** Capture goes through `tools/wincap.py`, which asks the compositor for each window's own offscreen pixmap (`XCompositeNameWindowPixmap`), so a window that is **covered** by something else captures perfectly — including covered by the glass board itself. Verified with a green window deliberately buried under a floating blue one, the screen pixel at its centre confirmed blue, and the capture coming back pure green.
 
-**Control is limited to i3 commands** — `workspace`, `focus`, `fullscreen`, `peek` — sent through a server-side allowlist, never free-form text. The Desks channel itself has no synthetic mouse or keyboard input, and `kill` is not implemented: gesture-driven window control never closes anything for you. (The HUD, below, is a separate feature — a real synthetic pointer, deliberately scoped to move-only, gated by the owner lock, and off unless you turn it on.) `move` and `layout` aren't in the allowlist either — the page never calls them, and both act on more than "this one window" (`move` relocates a whole container between workspaces; `layout` re-lays-out whatever's currently focused) with no undo from the board, so they stay out until something actually needs them. `peek` (above) is the sole exception carved out for refreshing a hidden window, and it's scoped tightly: it only switches to and back from the one workspace the requested window is already on. Desk cards are their own item type, deliberately flat and un-relief'd — a live desktop rendered as an embossed 3D scene would be unreadable, unlike a staged still image.
+What genuinely cannot be captured is an **unmapped** window: i3 unmaps every window on a hidden workspace, and also unmaps tiled windows that a fullscreen sibling covers (`xprop WM_STATE` reports `Withdrawn`), and an unmapped window has no pixels anywhere for any tool to read. So the gate is `WM_STATE`, asked of X directly per window (about 0.03 ms), reported as `capturable` in `/desks` — separately from `visible`, which still means "its workspace is on screen". The two are deliberately different, and the gap between them is the useful part: a window behind the glass is capturable but not visible.
+
+For a window that really is unmapped, a card shows the **last frame it ever produced**, honestly aged: `LIVE` (green), `OFF-SCREEN · Nm ago` (grey), or `OFF-SCREEN · tap to bring` with an empty glass frame if nothing was ever captured. Tapping that badge **brings the window here** — moves it onto the board's own workspace, where the glass floats over it, so it stays mapped and streams genuinely live from then on. That replaced the old `peek`, which could only borrow a single frame at the cost of a visible flicker and went stale immediately. (`peek` still exists as the fallback when the server cannot see a board window to bring things to.) Missing the `desks` key entirely, or `"enabled": false`, disables the feature completely: every `/desks*` endpoint 404s, and the orb never appears.
+
+**Do not fullscreen the board.** `launch-hud.sh` deliberately floats it at screen size instead of calling i3's `fullscreen enable`, because a fullscreen window makes i3 unmap its tiled siblings — which is exactly the windows you were trying to watch. Floating keeps them mapped. Measured through a real board covering a live-updating terminal: 45 distinct frames in 5 seconds, 38 KB/s, of the terminal's own content.
+
+**Control is limited to i3 commands** — `workspace`, `focus`, `fullscreen`, `peek`, `bring`, `send` — sent through a server-side allowlist, never free-form text. The Desks channel itself has no synthetic mouse or keyboard input, and `kill` is not implemented: gesture-driven window control never closes anything for you. (The HUD, below, is a separate feature — a real synthetic pointer, deliberately scoped to move-only, gated by the owner lock, and off unless you turn it on.) The general `move` verb still isn't in the allowlist, and `layout` isn't either — `layout` acts on whatever happens to be focused rather than a named container, with no undo from the board. `bring` and `send` are the narrow, named slice of `move` that the board actually needs, and they are scoped so the **destination is never taken from the request**: `bring` always targets the board's own workspace as the server itself observed it, and `send` only accepts a workspace already present in the live i3 tree. The caller chooses which window moves, never where it can end up. `peek` (above) is the sole exception carved out for refreshing a hidden window, and it's scoped tightly: it only switches to and back from the one workspace the requested window is already on. Desk cards are their own item type, deliberately flat and un-relief'd — a live desktop rendered as an embossed 3D scene would be unreadable, unlike a staged still image.
 
 **Privacy.** Every capture is served from `/desks/shot` and `/desks/stream` on localhost only, exactly like everything else here — nothing leaves your machine. The board's own window (and the status bar) are always excluded from the workspace/window list, so the glass never mirrors itself.
 
@@ -108,13 +116,22 @@ A `Desks` orb turns the board into a live view of your own machine — tap it an
 
 ## The HUD — pointer follow over your real desktop
 
-Mirroring a desktop onto the glass turned out to be impossible on X11 (i3 unmaps any window that isn't currently visible, so there are no pixels left for anything to capture — see the Desks section above). The HUD is the other way around: instead of showing your desktop on the glass, it puts the glass **on top of** your desktop. Your real browser, terminal, whatever's open — stays exactly where it is, fully visible, and the board's ring + glass items float above it on a transparent window. Your hand's tracked position drives the real system pointer, so you point at your actual desktop the way you'd use a mouse in the air.
+The HUD is the half of this that drives your real machine: your hand's tracked position moves the real system pointer, so you point at your actual desktop the way you'd use a mouse in the air.
+
+There are two ways to run it, because **Chrome on this machine cannot produce a per-pixel transparent window** — tested with and without `--enable-transparent-visuals`, with and without the GPU; the page always composites opaque white. So the original see-through-glass idea is not available here.
 
 ```
-./launch-hud.sh
+./launch-strip.sh    # the mirror look, in a small sticky panel — recommended
+./launch-hud.sh      # the full-screen board, floating over everything
 ```
 
-This opens `stage.html?mode=overlay&hud=1` in its own transparent, click-through, borderless, fullscreen Chrome window (floated and stickied across every workspace by i3), starting the server first if it isn't already up.
+`launch-strip.sh` opens `stage.html?mode=mirror&hud=1` in a small (460x330 by default, `JARVIS_STRIP_W/H/GAP` to change) borderless window, floated and stickied to every workspace and parked bottom-right. You get the mirror view you already know — yourself, your hands, the ring — it does not cover your work, and because it stays mapped it never stops being composited, so it holds full frame rate. This is the one to use if you want to work in your real apps and control them by hand.
+
+`launch-hud.sh` opens the same board full-screen: `stage.html?mode=overlay&hud=1` in a click-through borderless Chrome window, floated (never i3-fullscreened) and stickied across every workspace. It covers your screen, but since windows behind it stay mapped, you can stage them as live desk cards **on** the glass — which is the point of the full-screen mode rather than a drawback.
+
+Either way the server starts first if it isn't already up.
+
+**One board at a time.** Both launchers refuse if a jarvis Chrome is already running, and tell you which pid to kill. This is not fussiness: Chrome flags only land on a genuinely new process, so a second window opened against the same profile is handed to the running browser and keeps *its* flags. `--ignore-gpu-blocklist` disappears, MediaPipe falls back to the CPU delegate, and every model runs 4-6x slower — measured 8-10 fps against 31 fps, on the same machine with the same board. `JARVIS_FORCE=1` overrides it if you insist.
 
 **Enable it** in `jarvis.json`:
 
@@ -128,6 +145,7 @@ This opens `stage.html?mode=overlay&hud=1` in its own transparent, click-through
 
 **The pointer law.**
 - Pointer control **starts disarmed**, every time, no exceptions. While disarmed, nothing is ever sent to `/pointer`.
+- It works in **either** launcher — `hud=1` is what enables it, not the overlay window, so the mirror view drives the pointer just as well as the full-screen glass does.
 - Arm it with the **`A`** key, or by **pointing** — index finger up, the other fingers folded — and holding for about 0.7 seconds. Release it by making a **fist** and holding, or with `A`, or with `Escape` (which always disarms, instantly, whatever else is happening). The two gestures are deliberately asymmetric: pointing only ever arms and a fist only ever releases, because pointing is also the posture you hold while driving the cursor — if it toggled, you would disarm yourself moments after arming. The cursor follows your **index fingertip**. Each gesture needs its hold, so a flash of either shape does nothing.
 - **The owner lock gates every send**: a move is only ever sent for a hand whose role is `owner`, while the lock reads unlocked. A guest's hand, a stranger's hand, or a locked board never drives the pointer — and if the lock flips to locked while armed, the HUD disarms itself instantly, the same frame.
 - **`Escape` disarms instantly, always**, independent of everything else.
