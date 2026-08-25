@@ -318,7 +318,7 @@ def _ptr_open():
         return False
 
 
-def ptr_move(x, y, rate_hz):
+def ptr_move(x, y, rate_hz, force=False):
     """Move the real pointer to (x, y), clamped to the real screen bounds.
     Rate-limited server-side to rate_hz — a call arriving too soon after
     the last one is DROPPED, never queued (a queued backlog would make
@@ -328,7 +328,13 @@ def ptr_move(x, y, rate_hz):
         if not _ptr_open():
             return "error", _PTR["err"] or "X11 unavailable"
         now = time.monotonic()
-        if now - _PTR["lastT"] < 1.0 / max(1, rate_hz):
+        # A CLICK'S OWN MOVE IS NEVER DROPPED. Motion is rate-limited so a
+        # backlog cannot make the cursor lag the hand — dropping one frame
+        # of movement is invisible. But the move that positions a CLICK is
+        # not movement, it is aim: dropping it lands the click wherever the
+        # pointer happened to be, which is exactly the failure this pairing
+        # exists to prevent.
+        if not force and now - _PTR["lastT"] < 1.0 / max(1, rate_hz):
             return "dropped", None
         _PTR["lastT"] = now
         w, h = _PTR["w"] or 1920, _PTR["h"] or 1080
@@ -1778,7 +1784,8 @@ class Handler(SimpleHTTPRequestHandler):
                     or not isinstance(x, int) or not isinstance(y, int):
                 self._json({"err": "pointer: x/y must be integers"}, 400)
                 return
-            status, err = ptr_move(x, y, pcfg.get("rateHz", 90))
+            status, err = ptr_move(x, y, pcfg.get("rateHz", 90),
+                                   force=bool(req.get("force")))
             if status == "error":
                 self._json({"err": err}, 503)
             elif status == "dropped":

@@ -862,6 +862,20 @@ function ptrBadgeMode(button, down) {
   b.classList.toggle("down", down);
 }
 
+// WHERE IS THIS HAND AIMING, in real screen pixels? One answer, used by
+// both the continuous motion and the click, so they can never disagree.
+// Over a live desk card that is the matching point INSIDE that window;
+// otherwise it is the point on the display the finger is over.
+function ptrTargetFor(cur) {
+  const rawX = cur.ptrX != null ? cur.ptrX : (cur.tipX == null ? cur.x : cur.tipX);
+  const rawY = cur.ptrY != null ? cur.ptrY : (cur.tipY == null ? cur.y : cur.tipY);
+  const hit = deskPointAt(rawX, rawY);
+  if (hit) return { x: hit.sx, y: hit.sy, hit };
+  const offX = (window.screenX || 0) + (window.outerWidth - window.innerWidth) / 2;
+  const offY = (window.screenY || 0) + (window.outerHeight - window.innerHeight);
+  return { x: Math.round(rawX + offX), y: Math.round(rawY + offY), hit: null };
+}
+
 async function ptrSend(body) {
   try {
     await fetch("/pointer", { method: "POST",
@@ -978,7 +992,9 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
     if (!cur.ptrBtn && !cur.ptrDragged && now - cur.ptrContactT > g.holdMs) {
       cur.ptrBtn = cur.ptrContact || 1;               // becomes a DRAG
       cur.ptrDragged = true;
-      ptrSend({ a: "click", button: cur.ptrBtn, action: "press" });
+      const t = ptrTargetFor(cur);                    // same reason as the click
+      ptrSend({ a: "move", x: t.x, y: t.y, force: true })
+        .then(() => ptrSend({ a: "click", button: cur.ptrBtn, action: "press" }));
       toast("drag", 700);
     }
   } else if (!contact && cur.ptrContact) {   // thumb lifts
@@ -989,7 +1005,17 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
       cur.ptrBtn = null;
     } else if (held >= g.minMs && held <= g.holdMs) {   // a tap = a click
       cur.ptrClickT = now;
-      ptrSend({ a: "click", button: btn, action: "click" });
+      // MOVE FIRST, ALWAYS. This used to click wherever the pointer
+      // happened to be, trusting hudPointerTick to have put it under the
+      // finger — but that function has three early-outs (hand not read as
+      // pointing, rate limit, dead zone), so the pointer could be stale or
+      // never moved at all, and the click landed somewhere else entirely.
+      // That is why aiming at a button and tapping did nothing: the click
+      // was real, it just was not there.
+      const t = ptrTargetFor(cur);
+      HUD.lastClick = [t.x, t.y, btn, t.hit ? 1 : 0];
+      ptrSend({ a: "move", x: t.x, y: t.y, force: true })
+        .then(() => ptrSend({ a: "click", button: btn, action: "click" }));
       // flash the aiming dot: the toast lives at the top of the glass and
       // is easy to miss when you are looking at the app you just clicked
       if (cur.el) {
@@ -1086,7 +1112,8 @@ function hudPointerTick(now) {
   // that window — which is generally nowhere near where your finger is on
   // the glass, and is the whole point: the card is a remote control for a
   // window that may be anywhere, including behind this very board.
-  const hit = deskPointAt(px0, py0);
+  const aim = ptrTargetFor(cur);
+  const hit = aim.hit;
   // A card whose window is off-screen cannot be driven (deskPointAt
   // refuses it) — and silently doing nothing is exactly what made the
   // first real attempt feel broken: the card was showing a frozen frame
@@ -1116,8 +1143,7 @@ function hudPointerTick(now) {
   if (hit) HUD.cardBox = [Math.round(hit.it.el.offsetWidth),
                           Math.round(hit.it.el.offsetHeight),
                           hit.it.natW || 0, hit.it.natH || 0];
-  const sx = hit ? hit.sx : Math.round(px0 + offX);
-  const sy = hit ? hit.sy : Math.round(py0 + offY);
+  const sx = aim.x, sy = aim.y;
   const dx = HUD.lastSend.x == null ? 999 : sx - HUD.lastSend.x;
   const dy = HUD.lastSend.y == null ? 999 : sy - HUD.lastSend.y;
   if (Math.hypot(dx, dy) < (P.deadPx ?? 0.6)) return;
@@ -6520,6 +6546,7 @@ function pushState(now) {
            thumbCm: HUD.thumbCm == null ? null : HUD.thumbCm,
            thBase: HUD.thBase == null ? null : HUD.thBase,
            blocked: HUD.blocked || null,
+           lastClick: HUD.lastClick || null,
            card: (() => {
              const it = items.find(i => i.type === "desk" && i.el);
              if (!it) return null;
