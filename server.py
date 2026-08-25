@@ -113,6 +113,7 @@ Your AI drives the ring by writing tiny files into ./state/ :
 Missing files are fine — the ring just idles.
 """
 import collections
+import ctypes
 import io
 import json
 import mimetypes
@@ -381,6 +382,121 @@ def ptr_click(button, action, rate_hz):
         except Exception as e:
             return "error", f"XTest call failed: {e}"
         return "clicked", None
+
+
+# ---- HIDE THE REAL CURSOR WHILE HANDS ARE DRIVING (Task 33)
+# The X cursor draws above every window, the board included, so while a
+# hand drove the pointer there were two cursors on screen: the real one,
+# and whatever the glass showed. Worse, when the hand is over a desk card
+# the real cursor is deliberately somewhere else entirely — inside the
+# window being controlled — so it appears "outside somewhere" with no
+# visible connection to the hand. XFixes can hide it screen-wide.
+#
+# SAFETY: a hidden cursor with no way to get it back would be a genuinely
+# bad thing to leave a user with. It is restored on disarm, by a watchdog
+# if the page stops asking for it (crash, close, workspace switch), and at
+# server shutdown.
+_CUR = {"lib": None, "hidden": False, "t": 0.0, "err": None}
+_CUR_LOCK = threading.Lock()
+_CUR_KEEPALIVE_S = 5.0
+
+
+# An unhandled X protocol error calls Xlib's default handler, which
+# EXITS THE PROCESS. That is how the first version of this took the whole
+# server down on its first request. Every X error is swallowed here and
+# turned into a flag the caller can read.
+_XERR = {"n": 0}
+_XERRH_T = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+
+
+def _on_xerror(dpy, ev):
+    _XERR["n"] += 1
+    return 0
+
+
+_XERRH = _XERRH_T(_on_xerror)
+
+
+def _cursor_lib():
+    if _CUR["lib"] is None and _CUR["err"] is None:
+        try:
+            import ctypes.util
+            path = ctypes.util.find_library("Xfixes")
+            if not path:
+                raise RuntimeError("libXfixes not found")
+            lib = ctypes.CDLL(path)
+            lib.XFixesQueryExtension.restype = ctypes.c_int
+            lib.XFixesQueryExtension.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+            lib.XFixesQueryVersion.restype = ctypes.c_int
+            lib.XFixesQueryVersion.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+            lib.XFixesHideCursor.restype = None
+            lib.XFixesHideCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            lib.XFixesShowCursor.restype = None
+            lib.XFixesShowCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+            if not _ptr_open():
+                raise RuntimeError("X display unavailable")
+            x11 = _PTR["x11"]
+            x11.XSetErrorHandler.restype = ctypes.c_void_p
+            x11.XSetErrorHandler.argtypes = [ctypes.c_void_p]
+            x11.XSetErrorHandler(ctypes.cast(_XERRH, ctypes.c_void_p))
+            x11.XDefaultRootWindow.restype = ctypes.c_ulong
+            x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+            x11.XSync.restype = ctypes.c_int
+            x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            # XFixes REFUSES every request until the version is negotiated —
+            # skipping this is what produced BadMatch on the very first call.
+            dpy = _PTR["disp"]
+            ev, er = ctypes.c_int(), ctypes.c_int()
+            if not lib.XFixesQueryExtension(dpy, ctypes.byref(ev), ctypes.byref(er)):
+                raise RuntimeError("XFixes extension not present")
+            maj, mino = ctypes.c_int(5), ctypes.c_int(0)
+            lib.XFixesQueryVersion(dpy, ctypes.byref(maj), ctypes.byref(mino))
+            _CUR["lib"] = lib
+        except Exception as e:
+            _CUR["err"] = str(e)
+            print("cursor: hiding unavailable (%s)" % e, flush=True)
+    return _CUR["lib"]
+
+
+def cursor_show(show):
+    """Hide or restore the X cursor screen-wide. Never raises."""
+    with _CUR_LOCK:
+        lib = _cursor_lib()
+        if lib is None or not _ptr_open():
+            return False, _CUR["err"] or "X unavailable"
+        try:
+            dpy = _PTR["disp"]
+            root = _PTR["x11"].XDefaultRootWindow(dpy)
+            before = _XERR["n"]
+            if show:
+                if _CUR["hidden"]:
+                    lib.XFixesShowCursor(dpy, root)
+                    _CUR["hidden"] = False
+            else:
+                if not _CUR["hidden"]:
+                    lib.XFixesHideCursor(dpy, root)
+                    _CUR["hidden"] = True
+                _CUR["t"] = time.monotonic()
+            _PTR["x11"].XSync(dpy, 0)          # surface any error NOW
+            if _XERR["n"] != before:
+                _CUR["err"] = "X rejected the cursor request"
+                _CUR["hidden"] = False
+                return False, _CUR["err"]
+            return True, None
+        except Exception as e:
+            return False, str(e)
+
+
+def _cursor_watchdog():
+    """Give the cursor back if the page stops asking for it hidden — it
+    may have crashed, been closed, or moved to another workspace. Without
+    this a dead board leaves the machine with no visible pointer."""
+    while True:
+        time.sleep(1.0)
+        if _CUR["hidden"] and time.monotonic() - _CUR["t"] > _CUR_KEEPALIVE_S:
+            cursor_show(True)
 
 
 def _jail_resolve(root, rel):
@@ -1631,9 +1747,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self._json({"err": "bad json"}, 400)
                 return
             act = req.get("a")
-            if act not in ("move", "click"):
-                self._json({"err": "pointer: only 'move' and 'click' exist — "
-                                    "scroll/drag/key are refused"}, 400)
+            if act not in ("move", "click", "cursor"):
+                self._json({"err": "pointer: only 'move', 'click' and 'cursor' "
+                                    "exist — scroll/drag/key are refused"}, 400)
+                return
+            if act == "cursor":
+                ok, err = cursor_show(bool(req.get("show", True)))
+                self._json({"ok": ok} if ok else {"err": err}, 200 if ok else 503)
                 return
             if act == "click":
                 if not pcfg.get("click"):
@@ -2062,6 +2182,9 @@ class Handler(SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     (HERE / "state").mkdir(exist_ok=True)   # the ring's runtime files land here
     port = int(config().get("port", 8794))
+    threading.Thread(target=_cursor_watchdog, daemon=True).start()
+    import atexit
+    atexit.register(lambda: cursor_show(True))
     print(f"jarvis up: http://127.0.0.1:{port}/stage.html", flush=True)
     print("  tracker (camera): open that URL in Chrome", flush=True)
     print("  render (overlay): same URL + ?role=render", flush=True)

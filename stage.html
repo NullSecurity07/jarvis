@@ -372,17 +372,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
      when the finger is over a DESK CARD, where the real cursor has
      jumped away into that window and the dot is the only thing showing
      where your hand actually is. */
-  .cursor.ptrmode { display:none; }
+  /* Armed, this dot is the ONLY pointer on screen (the real one is
+     hidden), so it is always drawn — and it sits where the cursor is
+     going, because the mapping is 1:1. Over a desk card it stays under
+     your finger while the real cursor works inside the window. */
+  .cursor.ptrmode { display:block; width:14px; height:14px; margin:-7px 0 0 -7px;
+                    border-color:rgba(255,200,110,0.95);
+                    background:rgba(255,200,110,0.28);
+                    box-shadow:0 0 12px rgba(255,190,90,0.55); transform:none; }
+  .cursor.ptrmode.pinched { transform:none; background:rgba(255,200,110,0.28); }
   @keyframes ptrclick { 0% { transform:scale(1); opacity:1; }
                         100% { transform:scale(2.6); opacity:0; } }
   .cursor.clickflash::after { content:""; position:absolute; inset:-4px;
                               border-radius:50%; border:2px solid rgba(255,210,120,0.95);
                               animation:ptrclick .38s ease-out forwards; }
-  .cursor.ptrmode.ondesk { display:block;
-                    width:14px; height:14px; margin:-7px 0 0 -7px;
-                    border-color:rgba(255,200,110,0.95);
-                    background:rgba(255,200,110,0.3);
-                    box-shadow:0 0 12px rgba(255,190,90,0.6); transform:none; }
+  .cursor.ptrmode.ondesk { border-color:rgba(140,255,190,0.98);
+                    background:rgba(140,255,190,0.32);
+                    box-shadow:0 0 16px rgba(120,255,180,0.7); }
   .cursor.ptrmode.pinched { background:rgba(255,200,110,0.25); transform:none;
                             box-shadow:0 0 10px rgba(255,190,90,0.5); }
   .cursor.ptrmode .dwell { display:none; }
@@ -665,6 +671,20 @@ function hudSetArmed(v) {
   // it — every subsequent move becomes a drag and the user has to reach
   // for the physical mouse to escape.
   if (!v) { ptrReleaseAll("disarmed"); _ptrBadgeState = ""; }
+  // THE REAL CURSOR IS HIDDEN WHILE HANDS DRIVE. The X cursor draws above
+  // every window including the board, so armed there were two pointers on
+  // screen — and over a desk card the real one is deliberately elsewhere
+  // (inside the window being controlled), which is the "outside somewhere"
+  // the user saw. The glass dot is the only pointer while armed.
+  ptrSend({ a: "cursor", show: !v });
+  clearInterval(HUD.curKeep); HUD.curKeep = null;
+  if (v) {
+    // the server gives the cursor back on its own if these stop arriving,
+    // so a crashed or closed board can never strand the machine without one
+    HUD.curKeep = setInterval(() => {
+      if (HUD.armed) ptrSend({ a: "cursor", show: false });
+    }, 2000);
+  }
   const b = hudBadge();
   if (b) {
     b.textContent = v ? "POINTER ARMED · thumb tap = click — 1 finger L · 2 R · 3 M · hold = drag · FIST to release"
@@ -1041,14 +1061,18 @@ function hudPointerTick(now) {
   // frame, so in practice a real hand only ever covered the middle of it.
   // The screen edges were literally unreachable and every small movement
   // was scaled down. `pointer.zone` is the fraction of the frame that
-  // maps to the whole screen (0.62 => the middle 62% covers everything,
-  // so the hand moves ~1.6x less for the same cursor travel and the
-  // corners are reachable). 1.0 restores the old 1:1 behaviour.
+  // maps to the whole screen. It defaults to 1.0 — DIRECT — because
+  // anything less breaks the one thing that makes an air pointer usable:
+  // the cursor being where your hand appears to be. At 0.62 the cursor
+  // travelled ~1.6x further from centre than the hand did in the mirror,
+  // which the user reported as "the pointer is not accurate to where it
+  // shows on screen". That was not a tracking error; it was this knob.
+  // Lower it only if you would rather have reach than correspondence.
   //
   // Smoothing is separate from the glass cursor's: the board's own lerp
   // is tuned for calm card handling, which reads as lag on a mouse.
   const P = (TUNE.pointer || {});
-  const zone = Math.min(1, Math.max(0.2, P.zone ?? 0.62));
+  const zone = Math.min(1, Math.max(0.2, P.zone ?? 1.0));
   const plerp = Math.min(1, Math.max(0.15, P.lerp ?? 0.75));
   const rawX = cur.tipX == null ? cur.x : cur.tipX;   // the index tip drives
   const rawY = cur.tipY == null ? cur.y : cur.tipY;

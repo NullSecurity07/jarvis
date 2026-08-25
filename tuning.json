@@ -147,7 +147,7 @@
   },
   "pointer": {
     "_": "THE POINTER FEEL. zone = the fraction of the camera frame that maps to the WHOLE screen; 0.62 means the middle 62% covers everything, so the hand travels ~1.6x less and the screen corners are reachable (1.0 = the old 1:1 mapping, where the edges could not be reached at all). lerp = pointer smoothing, separate from hands.cursorLerp because the calm smoothing that suits dragging cards reads as lag on a mouse; higher is more responsive. deadPx = ignore moves smaller than this. gesture (Task 29): the button is the THUMB moving toward the INDEX KNUCKLE \u2014 not toward a fingertip, which is unreachable when the other fingers are folded to hold the point, and which would also collide with the board's own tip-to-tip pinch test. tapIn/tapOut are that distance in span units, with hysteresis so a wobbling hand cannot chatter. holdMs = press longer than this and it becomes a DRAG instead of a click. doubleMs = two taps inside this window so the app sees a double-click. scrollPxPerClick = hand travel per wheel click. Which button a tap means comes from how many fingers are out: 1 = left, 2 = right, 3 = middle.",
-    "zone": 0.62,
+    "zone": 1.0,
     "lerp": 0.75,
     "deadPx": 0.6,
     "gesture": {
