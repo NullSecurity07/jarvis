@@ -862,6 +862,23 @@ function ptrBadgeMode(button, down) {
   b.classList.toggle("down", down);
 }
 
+// The aim point in BOARD pixels, smoothed. Kept here (not inside
+// hudPointerTick) because that function rate-limits itself to 90Hz and
+// bails out early in several cases, which used to leave the aim stale
+// while the dot and the click both wanted to read it.
+function ptrAimUpdate(cur) {
+  const P = (TUNE.pointer || {});
+  const zone = Math.min(1, Math.max(0.2, P.zone ?? 1.0));
+  const plerp = Math.min(1, Math.max(0.15, P.lerp ?? 0.75));
+  const rawX = cur.tipX == null ? cur.x : cur.tipX;
+  const rawY = cur.tipY == null ? cur.y : cur.tipY;
+  const zx = Math.min(1, Math.max(0, (rawX / innerWidth - 0.5) / zone + 0.5));
+  const zy = Math.min(1, Math.max(0, (rawY / innerHeight - 0.5) / zone + 0.5));
+  const tX = zx * innerWidth, tY = zy * innerHeight;
+  cur.ptrX = cur.ptrX == null ? tX : cur.ptrX + (tX - cur.ptrX) * plerp;
+  cur.ptrY = cur.ptrY == null ? tY : cur.ptrY + (tY - cur.ptrY) * plerp;
+}
+
 // WHERE IS THIS HAND AIMING, in real screen pixels? One answer, used by
 // both the continuous motion and the click, so they can never disagree.
 // Over a live desk card that is the matching point INSIDE that window;
@@ -903,6 +920,7 @@ function ptrFingersOut(wl, extArr) {
 }
 
 function ptrMouseTick(cur, lms, span, extArr, now, wl) {
+  ptrAimUpdate(cur);        // every frame, so the dot and the click agree
   if (!PTR_CFG || !PTR_CFG.click || !span) { cur.ptrBtn = null; return; }
   const g = { ...PTR_G, ...((TUNE.pointer && TUNE.pointer.gesture) || {}) };
   const th = lms[4];
@@ -1073,12 +1091,7 @@ function hudPointerTick(now) {
   if (cur.ptrPointing === false) return;
   const rateHz = (PTR_CFG && PTR_CFG.rateHz) || 90;
   if (now - HUD.lastSend.t < 1000 / rateHz) return;
-  // window px -> screen px: the overlay is sized to cover the whole
-  // screen (launch.sh floats + sticks the panel with i3), so this is
-  // 1:1 plus whatever chrome the browser window itself adds — computed,
-  // not assumed, so a decorated window still maps correctly.
-  const offX = (window.screenX || 0) + (window.outerWidth - window.innerWidth) / 2;
-  const offY = (window.screenY || 0) + (window.outerHeight - window.innerHeight);
+  // (the board px -> screen px offset lives in ptrTargetFor now)
   // SENSITIVITY (Task 28). The user: "the pointer system is very crude
   // the tracking isnt proper, too less sensitive".
   //
@@ -1098,15 +1111,7 @@ function hudPointerTick(now) {
   // Smoothing is separate from the glass cursor's: the board's own lerp
   // is tuned for calm card handling, which reads as lag on a mouse.
   const P = (TUNE.pointer || {});
-  const zone = Math.min(1, Math.max(0.2, P.zone ?? 1.0));
-  const plerp = Math.min(1, Math.max(0.15, P.lerp ?? 0.75));
-  const rawX = cur.tipX == null ? cur.x : cur.tipX;   // the index tip drives
-  const rawY = cur.tipY == null ? cur.y : cur.tipY;
-  const zx = Math.min(1, Math.max(0, (rawX / innerWidth - 0.5) / zone + 0.5));
-  const zy = Math.min(1, Math.max(0, (rawY / innerHeight - 0.5) / zone + 0.5));
-  const tX = zx * innerWidth, tY = zy * innerHeight;
-  cur.ptrX = cur.ptrX == null ? tX : cur.ptrX + (tX - cur.ptrX) * plerp;
-  cur.ptrY = cur.ptrY == null ? tY : cur.ptrY + (tY - cur.ptrY) * plerp;
+  ptrAimUpdate(cur);
   const px0 = cur.ptrX, py0 = cur.ptrY;
   // Over a live desk card, the pointer goes where you are pointing INSIDE
   // that window — which is generally nowhere near where your finger is on
@@ -5728,7 +5733,17 @@ async function boot() {
             }
           }
         } else cur.tu = 0;
-        cur.el.style.left = cur.x + "px"; cur.el.style.top = cur.y + "px";
+        // THE DOT MUST SIT WHERE THE CLICK WILL LAND. The board's cursor
+        // rides the PINCH MIDPOINT of index and thumb — right for grabbing
+        // cards, wrong for aiming — while the pointer rides the INDEX TIP.
+        // So the dot was drawn inches from where the click actually went,
+        // and worse, moving the thumb to click dragged the midpoint away
+        // from the tip at exactly the moment of clicking. Armed, the dot is
+        // drawn at the pointer's own aim point instead.
+        const _armedHand = HUD_MODE && HUD.armed && cur.role === "owner" &&
+                           cur.ptrX != null;
+        cur.el.style.left = (_armedHand ? cur.ptrX : cur.x) + "px";
+        cur.el.style.top  = (_armedHand ? cur.ptrY : cur.y) + "px";
 
         // ---- THE PALM ENGINE — a gesture set designed for imperfect,
         // real-world hands: every trigger is finger EXTENSION
