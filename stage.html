@@ -849,17 +849,19 @@ const PTR_G = {
 };
 
 let _ptrBadgeState = "";
-function ptrBadgeMode(button, down) {
+function ptrBadgeMode(button, down, scrolling) {
   const b = hudBadge();
   if (!b || !HUD.armed) return;
   const name = button === 3 ? "RIGHT" : button === 2 ? "MIDDLE" : "LEFT";
-  const key = name + (down ? "!" : "");
+  const key = (scrolling ? "SCROLL" : name) + (down ? "!" : "");
   if (key === _ptrBadgeState) return;
   _ptrBadgeState = key;
-  b.textContent = down
-    ? `● ${name} DOWN — lift the thumb to click, hold to drag`
-    : `POINTER ARMED · ${name} click — tap thumb · 2 fingers = right · 3 = middle · FIST to release`;
-  b.classList.toggle("down", down);
+  b.textContent = scrolling
+    ? "↕ SCROLL — move your hand up and down · fold the middle finger to click again"
+    : down
+      ? `● ${name} DOWN — lift the thumb to click, hold to drag`
+      : `POINTER ARMED · ${name} click — tap thumb · 2 fingers = scroll/right · 3 = middle · FIST to release`;
+  b.classList.toggle("down", down || !!scrolling);
 }
 
 // The aim point in BOARD pixels, smoothed. Kept here (not inside
@@ -911,12 +913,15 @@ async function ptrSend(body) {
 // hand-centred metres, so the same pose reads the same whatever direction
 // it aims. Falls back to the 2D read when the model gives no world hand.
 function ptrFingersOut(wl, extArr) {
-  if (!wl) return (extArr[0] ? 1 : 0) + (extArr[1] ? 1 : 0) + (extArr[2] ? 1 : 0);
+  // Returns [index, middle, ring] as booleans, in metric 3D when the model
+  // gives a world hand. Which fingers matters, not just how many: scroll
+  // is specifically index+middle, and asking the 2D test for that was the
+  // reason scrolling never fired — it reads a pointing hand as folded
+  // whenever the hand aims at the lens (0 on 131 of 216 logged samples).
+  if (!wl) return [!!extArr[0], !!extArr[1], !!extArr[2]];
   const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
-  let n = 0;
-  for (const [tip, mcp] of [[8, 5], [12, 9], [16, 13]])
-    if (d3(wl[tip], wl[0]) > 1.35 * d3(wl[mcp], wl[0])) n++;
-  return n;
+  return [[8, 5], [12, 9], [16, 13]].map(([tip, mcp]) =>
+    d3(wl[tip], wl[0]) > 1.35 * d3(wl[mcp], wl[0]));
 }
 
 function ptrMouseTick(cur, lms, span, extArr, now, wl) {
@@ -929,27 +934,40 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
   // WHICH BUTTON: how many fingers are out. 1 = left, 2 = right, 3 =
   // middle. Chosen this way because adding a finger is easy from the
   // pointing pose, while reaching a folded fingertip with the thumb is not.
-  const nOut = ptrFingersOut(wl, extArr);
+  const fOut = ptrFingersOut(wl, extArr);
+  const nOut = (fOut[0] ? 1 : 0) + (fOut[1] ? 1 : 0) + (fOut[2] ? 1 : 0);
   const button = nOut >= 3 ? 2 : nOut === 2 ? 3 : 1;
   cur.ptrButtonHint = button;
   // SHOW THE MODE BEFORE IT IS COMMITTED. Which button a tap sends
   // depends on how many fingers are out, and until now that was invisible
   // — you found out by clicking and seeing what happened. The badge names
   // it live, and lights up while the thumb is actually down.
-  ptrBadgeMode(button, !!cur.ptrContact);
+  ptrBadgeMode(button, !!cur.ptrContact, fOut[0] && fOut[1] && !fOut[2]);
 
   // ---- SCROLL: index + middle out, hand moves up/down
-  const peace = extArr[0] && extArr[1] && !extArr[2] && !extArr[3];
+  // index + middle out, ring folded — read in 3D, so it survives the hand
+  // pointing at the camera
+  const peace = fOut[0] && fOut[1] && !fOut[2];
   if (peace && !cur.ptrContact) {
-    if (cur.scrollY0 == null) cur.scrollY0 = cur.y;
-    const dy = cur.y - cur.scrollY0;
+    // measure against the AIM point, the same one the dot is drawn at,
+    // not the pinch midpoint (which moves when the thumb does)
+    const ay = cur.ptrY != null ? cur.ptrY : cur.y;
+    if (cur.scrollY0 == null) cur.scrollY0 = ay;
+    const dy = ay - cur.scrollY0;
     const steps = Math.trunc(dy / g.scrollPxPerClick);
     if (steps !== 0) {
       cur.scrollY0 += steps * g.scrollPxPerClick;
       // wheel up when the hand rises (dy negative), like a real wheel
       const button = steps < 0 ? 4 : 5;
-      for (let k = 0; k < Math.min(5, Math.abs(steps)); k++)
-        ptrSend({ a: "click", button, action: "click" });
+      const n = Math.min(5, Math.abs(steps));
+      // AND PUT THE POINTER THERE FIRST. A wheel event goes to whatever is
+      // under the cursor, so without this the page you were looking at was
+      // never the page that scrolled — the same bug the click had.
+      const t = ptrTargetFor(cur);
+      ptrSend({ a: "move", x: t.x, y: t.y, force: true }).then(() => {
+        for (let k = 0; k < n; k++)
+          ptrSend({ a: "click", button, action: "click" });
+      });
     }
     // Scrolling and clicking are different acts; do not let a scroll
     // leave a button held down.

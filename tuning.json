@@ -158,7 +158,7 @@
       "cooldownMs": 320,
       "stillPx": 55,
       "doubleMs": 420,
-      "scrollPxPerClick": 38,
+      "scrollPxPerClick": 55,
       "baseAlpha": 0.06
     }
   },
