@@ -1639,11 +1639,13 @@ class Handler(SimpleHTTPRequestHandler):
                     if cid is None or not any(w["cid"] == cid for w in snap["wins"]):
                         raise ValueError("unknown cid")
                     _i3(f"[con_id={cid}]", "focus")
+                    _board_raise(snap, cid)      # the glass stays the top layer
                 elif a == "fullscreen":
                     cid = _desks_int(cmd.get("cid"))
                     if cid is None or not any(w["cid"] == cid for w in snap["wins"]):
                         raise ValueError("unknown cid")
                     _i3(f"[con_id={cid}]", "fullscreen", "toggle")
+                    _board_raise(snap, cid)
                 elif a in ("bring", "send"):
                     # THE POINT OF THE WHOLE THING (Task 22). A window on
                     # another workspace is unmapped, so no frame of it
