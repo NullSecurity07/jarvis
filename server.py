@@ -1718,8 +1718,24 @@ class Handler(SimpleHTTPRequestHandler):
                     # i3 unmap its tiled siblings, and those siblings are
                     # other windows whose cards would go dead. `send` puts
                     # it back to tiling.
+                    # DEFAULT OFF (Task 36). Floating the target to give it
+                    # room cannot work alongside a floating board under
+                    # focus_follows_mouse: i3 raises a floating window
+                    # whenever the pointer enters it, and the pointer here
+                    # is a hand that moves constantly. So the target kept
+                    # being raised back above the glass — the user saw
+                    # their browser take over the screen, with the real
+                    # window and its card showing the same content offset
+                    # from each other, and no visible pointer because the
+                    # dot was behind it and the real cursor is hidden while
+                    # armed. Re-raising the board could not hold that line;
+                    # it lost again on the next pointer move.
+                    #
+                    # The window's own size is what a card shows, which is
+                    # the honest thing anyway: "as if i opened it normally
+                    # on my screen" is exactly what a tiled window IS.
                     d2 = config().get("desks", {})
-                    if d2.get("bringBig", True) and a == "bring":
+                    if d2.get("bringBig", False) and a == "bring":
                         sw, sh = snap.get("screen") or [1920, 1080]
                         bw = int(sw * float(d2.get("bringW", 0.86)))
                         bh = int(sh * float(d2.get("bringH", 0.86)))

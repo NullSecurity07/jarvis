@@ -164,9 +164,9 @@
   },
   "desks": {
     "openFull": false,
-    "_": "THE DESKS on the glass. A card opens LIFE SIZE \u2014 the window at its own pixel size, exactly as it looks if you switch to it \u2014 and is only shrunk when it will not fit. tileW/tileH are that ceiling as a fraction of the glass, not a target size. openFull toggles the separate borderless full-screen mode (Z, or bin/board.sh '{\"a\":\"deskfull\"}'). Opening a desk also BRINGS that window to the workspace you are on, since a window elsewhere is unmapped and can only show a frozen frame. bringBig: bringing a window here also FLOATS it at bringW/bringH of the display (0.86), because i3 tiles a newly opened window beside whatever is already there and it ends up with half a screen \u2014 which, with life-size cards, is exactly what you then see on the glass. Floating, never fullscreen: fullscreen would unmap the tiled siblings and kill their cards. `send` puts it back to tiling.",
+    "_": "THE DESKS on the glass. A card opens LIFE SIZE \u2014 the window at its own pixel size, exactly as it looks if you switch to it \u2014 and is only shrunk when it will not fit. tileW/tileH are that ceiling, not a target. Opening a desk BRINGS that window to the workspace you are on, since a window elsewhere is unmapped and can only show a frozen frame. bringBig (OFF): also float the window at bringW/bringH of the display. It is off because a floating target cannot coexist with a floating board under focus_follows_mouse \u2014 i3 raises a floating window whenever the pointer enters it, and here the pointer is a hand that moves constantly, so the window kept being raised back on top of the glass.",
     "tileW": 0.96,
     "tileH": 0.92,
-    "bringBig": true
+    "bringBig": false
   }
 }
