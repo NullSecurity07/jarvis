@@ -803,6 +803,39 @@ def _desks_snapshot():
             "boardXid": board_xid, "screen": _desks_screen()}
 
 
+def _board_raise(snap, via_cid=None):
+    """Put the glass back on top of the floating stack.
+
+    THE GLASS MUST STAY THE TOP LAYER (Task 35). i3 stacks floating
+    windows, and the board is itself floating — so floating another window
+    (which is what `bring` does to give it room) raises that window ABOVE
+    the board and buries the glass. The user saw their browser take over
+    the screen with the board somewhere underneath, and with the real
+    cursor hidden while armed and the glass dot hidden behind the browser,
+    there was no visible pointer at all.
+
+    `focus` is what raises a floating window in i3 — measured: focusing
+    the board moved it from stack index 4 to 5, above a window that had
+    just been floated, while xdotool windowraise did nothing at all
+    because i3 restacks over it.
+
+    But focus only raises on a CHANGE. The board is usually already the
+    focused window, so focusing it again is a no-op — which is why the
+    first version of this fixed nothing and the browser stayed on top. So
+    focus is deliberately bounced through the other window first.
+
+    Taking focus costs nothing here: the board wants no keystrokes, clicks
+    are delivered by position rather than focus, and this i3 is
+    focus_follows_mouse, so the app takes focus back the moment the
+    pointer moves over it."""
+    bxid = snap.get("boardXid")
+    if not bxid:
+        return
+    if via_cid:
+        _i3(f"[con_id={via_cid}]", "focus")
+    _i3(f"[id={bxid}]", "focus")
+
+
 def _desks_screen():
     """(w, h) of the output the board lives on, from i3's own geometry —
     never a hardcoded 1920x1080. Falls back to a sane default if i3 is
@@ -1695,6 +1728,9 @@ class Handler(SimpleHTTPRequestHandler):
                             str(max(0, (sw - bw) // 2)), str(max(0, (sh - bh) // 2)))
                     elif a == "send":
                         _i3(f"[con_id={win['cid']}]", "floating", "disable")
+                    # bounce focus through the moved window so focusing the
+                    # board is a real change, and therefore a real raise
+                    _board_raise(snap, win["cid"])   # never leave the glass buried
                     # i3 gives a moved-in window focus-follows semantics
                     # depending on config; the board must not lose the
                     # floating stack position it needs to stay on top, so
