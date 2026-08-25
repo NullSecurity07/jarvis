@@ -159,14 +159,16 @@
       "stillPx": 55,
       "doubleMs": 420,
       "scrollPxPerClick": 55,
-      "baseAlpha": 0.06
+      "baseAlpha": 0.06,
+      "stableMs": 250
     }
   },
   "desks": {
     "openFull": false,
-    "_": "THE DESKS on the glass. A card opens LIFE SIZE \u2014 the window at its own pixel size, exactly as it looks if you switch to it \u2014 and is only shrunk when it will not fit. tileW/tileH are that ceiling, not a target. Opening a desk BRINGS that window to the workspace you are on, since a window elsewhere is unmapped and can only show a frozen frame. bringBig (OFF): also float the window at bringW/bringH of the display. It is off because a floating target cannot coexist with a floating board under focus_follows_mouse \u2014 i3 raises a floating window whenever the pointer enters it, and here the pointer is a hand that moves constantly, so the window kept being raised back on top of the glass.",
-    "tileW": 0.96,
-    "tileH": 0.92,
-    "bringBig": false
+    "_": "THE DESKS on the glass. A card is fitted inside tileW x tileH of the glass, keeping the window's own aspect, so every desk opens the same predictable size whatever shape i3 left the window. lifeSize=true instead shows the window at its own pixel size (1:1) \u2014 right when windows get the whole screen, wrong under tiling, where a half-tiled 940x1012 window makes a card nearly as tall as the display. Opening a desk BRINGS that window to the workspace you are on, since a window elsewhere is unmapped and can only show a frozen frame. bringBig (OFF) would also float it: it cannot work under focus_follows_mouse, which re-raises a floating window above the glass on every pointer move. openFull toggles the borderless full-screen mode (Z, or the deskfull command).",
+    "tileW": 0.55,
+    "tileH": 0.62,
+    "bringBig": false,
+    "lifeSize": false
   }
 }

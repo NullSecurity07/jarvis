@@ -946,8 +946,19 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
   // WHICH BUTTON: how many fingers are out. 1 = left, 2 = right, 3 =
   // middle. Chosen this way because adding a finger is easy from the
   // pointing pose, while reaching a folded fingertip with the thumb is not.
-  const fOut = ptrFingersOut(wl, extArr);
-  const nOut = (fOut[0] ? 1 : 0) + (fOut[1] ? 1 : 0) + (fOut[2] ? 1 : 0);
+  const fRaw = ptrFingersOut(wl, extArr);
+  const nRaw = (fRaw[0] ? 1 : 0) + (fRaw[1] ? 1 : 0) + (fRaw[2] ? 1 : 0);
+  // DEBOUNCE THE FINGER COUNT. Logged live, it flips between 0 and 2 while
+  // a hand holds still, so the button a tap would send changed under the
+  // user — a tap meant to be LEFT arrived as RIGHT, or as nothing. The
+  // count has to hold for stableMs before it is believed, which costs a
+  // quarter second when deliberately changing mode and buys a button that
+  // stays what it says it is.
+  if (nRaw !== cur.nRawLast) { cur.nRawLast = nRaw; cur.nRawT = now; }
+  if (cur.nOutStable == null) cur.nOutStable = nRaw;
+  if (now - (cur.nRawT || 0) >= (g.stableMs ?? 250)) cur.nOutStable = nRaw;
+  const nOut = cur.ptrContact ? (cur.nOutAtPress ?? cur.nOutStable) : cur.nOutStable;
+  const fOut = fRaw;
   const button = nOut >= 3 ? 2 : nOut === 2 ? 3 : 1;
   cur.ptrButtonHint = button;
   // SHOW THE MODE BEFORE IT IS COMMITTED. Which button a tap sends
@@ -1003,8 +1014,17 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
   // the baseline only learns while the thumb is NOT pressed, so a long
   // press cannot drag the baseline down and strand the button on
   if (cur.thBase == null) cur.thBase = nearD;
-  else if (!cur.ptrContact)
-    cur.thBase += (nearD - cur.thBase) * g.baseAlpha;
+  else if (!cur.ptrContact) {
+    // LEARN FROM AN OPEN THUMB ONLY. The baseline is meant to be "where
+    // this thumb rests". Letting it follow every sample let a thumb held
+    // in — one whose press the gates refused — drag it down: logged going
+    // 0.68 -> 0.39, after which a real dip had to reach 0.31 to count, so
+    // detection got worse the more the user tried. It rises freely and
+    // only falls while the thumb is clearly out.
+    const open = nearD >= cur.thBase * 0.9;
+    if (nearD > cur.thBase || open)
+      cur.thBase += (nearD - cur.thBase) * g.baseAlpha;
+  }
 
   // GATES, loosened where the data said they were rejecting real presses.
   //
@@ -1033,6 +1053,7 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
   else if (dipped) HUD.blocked = null;
 
   if (contact && !cur.ptrContact) {          // thumb goes down
+    cur.nOutAtPress = cur.nOutStable;        // freeze the mode for this press
     cur.ptrContact = button;                 // remember which button it meant
     cur.ptrContactT = now;
     cur.ptrDragged = false;
@@ -1047,6 +1068,7 @@ function ptrMouseTick(cur, lms, span, extArr, now, wl) {
     }
   } else if (!contact && cur.ptrContact) {   // thumb lifts
     const btn = cur.ptrContact, held = now - cur.ptrContactT;
+    cur.nOutAtPress = null;
     cur.ptrContact = null;
     if (cur.ptrBtn) {                        // end of a drag
       ptrSend({ a: "click", button: cur.ptrBtn, action: "release" });
@@ -3134,10 +3156,20 @@ function deskFitAspect(it, img) {
   // if you switched to it — and only shrinks if the window is bigger than
   // the glass has room for. desks.tileW/tileH are the ceiling now, not the
   // target.
+  // A PANEL IS A PREDICTABLE SIZE (Task 37). Life size was the right idea
+  // for a window that has a screen to itself and the wrong one here: this
+  // user's windows are half-tiled, so a typical window is 940x1012 —
+  // portrait — and "life size" made a card nearly as tall as the display,
+  // which is what "same for size of the panel" was about. The card is
+  // fitted to a comfortable box now, keeping the window's aspect, so every
+  // desk opens the same predictable size whatever i3 did to the window.
+  // desks.lifeSize brings the 1:1 behaviour back for a setup where windows
+  // get the whole screen.
   const T = TUNE.desks || {};
-  const boxW = innerWidth * (T.tileW ?? 0.96), boxH = innerHeight * (T.tileH ?? 0.92);
+  const boxW = innerWidth * (T.tileW ?? 0.55), boxH = innerHeight * (T.tileH ?? 0.62);
   const a2 = nw / nh;
-  const w = Math.round(Math.min(nw, boxW, boxH * a2));
+  const lim = T.lifeSize ? Math.min(nw, boxW) : boxW;
+  const w = Math.round(Math.min(lim, boxH * a2));
   const want = Math.round(w / a2);
   if (Math.abs(body.clientWidth - w) > 2 || Math.abs(body.clientHeight - want) > 2) {
     it.el.style.width = w + "px";
