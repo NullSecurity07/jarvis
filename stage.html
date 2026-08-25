@@ -322,6 +322,18 @@ SPDX-License-Identifier: AGPL-3.0-or-later
                      align-items:center; justify-content:center; }
   .panel.desk.full .bar { display:none; }
   .panel.desk.full.ctl { box-shadow:inset 0 0 0 2px rgba(255,200,110,0.9); }
+  /* CLOSING A DESK (Task 34). The user: "there should be a better way to
+     close it". Tapping the bar anywhere already closed a card, which is
+     both undiscoverable and far too easy to do by accident on a card you
+     are trying to drag. A real ✕ with a fat hit area, and the bar-tap
+     no longer closes anything. */
+  .panel.desk .deskclose { flex:none; margin-left:10px; padding:6px 12px;
+                           font:15px "SF Mono",Menlo,monospace; line-height:1;
+                           color:#ffc9c9; border-radius:9px; cursor:pointer;
+                           border:1px solid rgba(255,120,120,0.55);
+                           background:rgba(255,80,80,0.16); }
+  .panel.desk .deskclose.hot { background:rgba(255,80,80,0.85); color:#2a0000;
+                               box-shadow:0 0 18px rgba(255,90,90,0.65); }
   /* the card your finger is driving right now (Task 26) */
   .panel.desk.ctl { box-shadow:0 0 0 2px rgba(255,200,110,0.85),
                                0 0 26px rgba(255,190,90,0.45); }
@@ -1163,6 +1175,15 @@ function hudPointerTick(now) {
         it.el.classList.toggle("ctl", !!hit && it.id === hit.it.id);
   }
   cur.el.classList.toggle("ondesk", !!hit);
+  // glow the ✕ under the finger so it reads as a target before it is used
+  for (const it of items) {
+    if (it.type !== "desk" || !it.el) continue;
+    const x = it.el.querySelector(".deskclose");
+    if (!x) continue;
+    const r = x.getBoundingClientRect();
+    x.classList.toggle("hot", px0 >= r.left - 18 && px0 <= r.right + 18 &&
+                              py0 >= r.top - 18 && py0 <= r.bottom + 18);
+  }
   if (hit) HUD.cardBox = [Math.round(hit.it.el.offsetWidth),
                           Math.round(hit.it.el.offsetHeight),
                           hit.it.natW || 0, hit.it.natH || 0];
@@ -2400,6 +2421,15 @@ function applyCmds(cmds) {
     } else if (c.a === "enroll") {          // forget the owner, re-arm the auto window
       fetch("/owner", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reset: true }) })
         .then(() => { LOCK.owner = null; LOCK.enrolled = false; LOCK.enroll = null; LOCK.state = {}; toast("owner forgotten — look at the camera alone for 3s to enroll", 4000); }).catch(() => {});
+    } else if (c.a === "deskclose") {
+      // focus-free, like the mirror dial and deskfull: the board is
+      // click-through under focus_follows_mouse, so a key is not a
+      // dependable way to reach anything
+      const cards = items.filter(i => i.type === "desk" && i.el);
+      const t = cards.find(i => i.id === HUD.overDesk) ||
+                cards.find(i => i.id === lastTouchedId) || cards[cards.length - 1];
+      if (t) { killItem(t); retileDesks(); toast("desk closed", 1200); }
+      else toast("no desk open", 1200);
     } else if (c.a === "deskfull") {
       // reachable without keyboard focus, like the mirror — the board is
       // click-through and this i3 is focus_follows_mouse, so a key alone
@@ -2934,6 +2964,32 @@ function browserTap(b, cur) {
 // Falls into physics()'s generic move/hold-rotate/two-hand-scale bucket
 // like "img"/"media" — nothing to special-case there; only the BAR
 // (tap-close / double-tap-focus) needs its own beginGrab/endGrab branch.
+// OPENING A DESK BRINGS IT HERE (Task 34). The user: "when i open a desk
+// it should automatically come there". A window on another workspace is
+// unmapped, so its card can only ever show a frozen last frame and cannot
+// be controlled at all — which meant every open was followed by noticing
+// the OFF-SCREEN badge and tapping "bring here". Opening it IS the
+// request to work with it, so the move happens on open.
+//
+// It only ever moves the window to the workspace you are looking at, and
+// the server picks that itself (see the `bring` verb) — nothing here names
+// a destination. `send` puts it back.
+async function deskAutoBring(xid) {
+  try {
+    const r = await fetch("/desks");
+    if (!r.ok) return;
+    const d = await r.json();
+    DESKS = d;
+    const w = (d.wins || []).find(x => x.xid === xid);
+    if (!w || w.capturable) return;            // already here and live
+    await fetch("/desks/cmd", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ a: "bring", xid }) });
+    toast("brought it here — it's live now", 1800);
+    setTimeout(desksHealthCheck, 350);
+  } catch (e) {}
+}
+
 function stageDesk(xid, title) {
   if (xid == null) return;
   const already = items.find(i => i.type === "desk" && i.def.xid === xid &&
@@ -2959,7 +3015,8 @@ function stageDesk(xid, title) {
   // longer than the fade-in, and it never asserts something unverified.
   el.innerHTML = `<div class="bar"><h3>${escT(title || "DESKTOP")}</h3>` +
                  `<span class="badge">…</span>` +
-                 `<span class="refresh" style="display:none">bring here</span></div>` +
+                 `<span class="refresh" style="display:none">bring here</span>` +
+                 `<span class="deskclose" title="close">✕</span></div>` +
                  `<div class="body"><img alt=""><div class="nolook-msg">no live view yet</div></div>`;
   BEHIND.appendChild(el);
   const it = { el, id: UID++, type: "desk", pinned: false, badge: null,
@@ -2995,6 +3052,7 @@ function stageDesk(xid, title) {
   };
   img.src = it.def.src;
   items.push(it);
+  deskAutoBring(xid);        // Task 34: opening it brings it here
   retileDesks();
   desksHealthCheck();   // Task 19: badge lands right away, not on the next 4s tick
   return it;
@@ -3070,10 +3128,16 @@ function deskFitAspect(it, img) {
   // function chose. Fitting inside a target box keeps every window shape
   // a sensible tile, and leaves the cap as a backstop rather than a
   // participant.
+  // LIFE SIZE (Task 34). The user: "the size it opens it should be like as
+  // if i opened it normally on my screen". So the card shows the window at
+  // the size the window actually IS — 1:1, the same pixels you would see
+  // if you switched to it — and only shrinks if the window is bigger than
+  // the glass has room for. desks.tileW/tileH are the ceiling now, not the
+  // target.
   const T = TUNE.desks || {};
-  const boxW = innerWidth * (T.tileW ?? 0.62), boxH = innerHeight * (T.tileH ?? 0.68);
+  const boxW = innerWidth * (T.tileW ?? 0.96), boxH = innerHeight * (T.tileH ?? 0.92);
   const a2 = nw / nh;
-  const w = Math.round(Math.min(boxW, boxH * a2));
+  const w = Math.round(Math.min(nw, boxW, boxH * a2));
   const want = Math.round(w / a2);
   if (Math.abs(body.clientWidth - w) > 2 || Math.abs(body.clientHeight - want) > 2) {
     it.el.style.width = w + "px";
@@ -3089,11 +3153,13 @@ function deskFitAspect(it, img) {
     // guessing when layout is ready, measure right here, where the height
     // was just applied, and set the scale from that. offsetHeight forces
     // the reflow, so these numbers are the real ones.
-    const cw = innerWidth - 80, ch = innerHeight - 80;
+    // scale 1 unless it genuinely does not fit: a card sized to the
+    // window's real pixels must not then be scaled, or it stops being
+    // life size and the whole point is lost
+    const cw = innerWidth - 24, ch = innerHeight - 24;
     const bw2 = it.el.offsetWidth, bh2 = it.el.offsetHeight;
     if (bw2 && bh2) {
-      const fitS = Math.min(1.6, Math.max(0.3,
-        Math.min(cw / bw2, ch / bh2) * 0.94));
+      const fitS = Math.min(1, Math.min(cw / bw2, ch / bh2));
       it.scale = fitS;
       if (it.anim && it.anim.k === "tile") it.anim.s1 = fitS;
     }
@@ -4159,6 +4225,12 @@ addEventListener("keydown", e => {
   // live respawn: re-read the notes AND props trees from disk before
   // redrawing — a freshly dropped file appears on a plain R press
   if (e.key === "z" || e.key === "Z") deskFullToggle();   // a desk as a screen
+  if (e.key === "x" || e.key === "X") {                  // close the desk in play
+    const cards = items.filter(i => i.type === "desk" && i.el);
+    const t = cards.find(i => i.id === HUD.overDesk) ||
+              cards.find(i => i.id === lastTouchedId) || cards[cards.length - 1];
+    if (t) { killItem(t); retileDesks(); toast("desk closed", 1200); }
+  }
   if (e.key === "r" || e.key === "R") loadTree().then(() => spawnStage());
   if (e.key === "d" || e.key === "D") dbg.style.display = dbg.style.display === "block" ? "none" : "block";
   if (e.key === "c" || e.key === "C") cycleCam();
@@ -4410,11 +4482,22 @@ function endGrab(c, i, cur) {
         // of its own) — only reachable when the badge shows it (a HIDDEN
         // card), so it can never fire on a LIVE card and never competes
         // with the close/double-tap-focus timing below.
-        const rEl = c.el.querySelector(".refresh");
-        const rR = rEl && rEl.offsetParent && rEl.getBoundingClientRect();
-        const onRefresh = rR && cur.x >= rR.left && cur.x <= rR.right &&
-                          cur.y >= rR.top && cur.y <= rR.bottom;
-        if (onRefresh) {
+        const inBox = (el) => {
+          const r = el && el.offsetParent && el.getBoundingClientRect();
+          // a generous pad: this is a fingertip in the air, not a mouse
+          return !!r && cur.x >= r.left - 18 && cur.x <= r.right + 18 &&
+                       cur.y >= r.top - 18 && cur.y <= r.bottom + 18;
+        };
+        const onRefresh = inBox(c.el.querySelector(".refresh"));
+        const onClose = inBox(c.el.querySelector(".deskclose"));
+        if (onClose) {
+          // CLOSING IS ITS OWN TARGET NOW (Task 34). It used to be "tap
+          // the bar and wait 400ms for the double-tap window to lapse",
+          // which is undiscoverable and fires by accident on a card you
+          // meant to drag. The bar no longer closes anything.
+          killItem(c); retileDesks();
+          toast("desk closed", 1200);
+        } else if (onRefresh) {
           deskBring(c);   // Task 22: bring it live for good, not one peeked frame
         } else {
           const tapNow = performance.now();
@@ -4422,11 +4505,10 @@ function endGrab(c, i, cur) {
             c._lastBarTap = 0;
             deskFocus(c.def.xid);
           } else {
+            // A LONE BAR TAP NO LONGER CLOSES ANYTHING (Task 34) — it
+            // only arms the double-tap that focuses the real window. The
+            // ✕ is the way to close, and the bar is safe to grab.
             c._lastBarTap = tapNow;
-            setTimeout(() => {
-              if (c._lastBarTap && performance.now() - c._lastBarTap >= 400 &&
-                  c.el.isConnected) { killItem(c); retileDesks(); }
-            }, 420);
           }
         }
       }

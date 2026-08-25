@@ -164,8 +164,9 @@
   },
   "desks": {
     "openFull": false,
-    "_": "THE DESKS on the glass. openFull: the first desk card you open goes FULL SCREEN immediately (bar and frame dropped, body sized to the window's own aspect \u2014 on a 1920x1080 display showing a 1920x1044 window that is 1:1, no resampling). Set false to have desks open tiled on the glass instead, at roughly 70% of native. Toggle either way with Z, or bin/board.sh '{\"a\":\"deskfull\"}' \u2014 which is the dependable one, since the board is click-through and this i3 is focus_follows_mouse, so it often has no keyboard focus. tileW/tileH: a desk tile is fitted inside this fraction of the viewport, preserving the window's own aspect \u2014 so a portrait window becomes a tall narrow tile rather than one taller than the screen that then has to be scaled back down.",
-    "tileW": 0.62,
-    "tileH": 0.68
+    "_": "THE DESKS on the glass. A card opens LIFE SIZE \u2014 the window at its own pixel size, exactly as it looks if you switch to it \u2014 and is only shrunk when it will not fit. tileW/tileH are that ceiling as a fraction of the glass, not a target size. openFull toggles the separate borderless full-screen mode (Z, or bin/board.sh '{\"a\":\"deskfull\"}'). Opening a desk also BRINGS that window to the workspace you are on, since a window elsewhere is unmapped and can only show a frozen frame. bringBig: bringing a window here also FLOATS it at bringW/bringH of the display (0.86), because i3 tiles a newly opened window beside whatever is already there and it ends up with half a screen \u2014 which, with life-size cards, is exactly what you then see on the glass. Floating, never fullscreen: fullscreen would unmap the tiled siblings and kill their cards. `send` puts it back to tiling.",
+    "tileW": 0.96,
+    "tileH": 0.92,
+    "bringBig": true
   }
 }

@@ -1021,7 +1021,7 @@ _ALLOWED = ("add_img", "add_card", "clear", "reset", "hand", "give",
             "yank", "hover", "scroll_note", "widget", "explode", "assemble",
             "present", "clinic", "light", "reload", "dump",
             "enroll", "guest", "lock",          # THE OWNER LOCK
-            "mirror", "deskfull",               # the camera dial + desk-as-a-screen
+            "mirror", "deskfull", "deskclose",  # camera dial, desk-as-a-screen, close
             "open_file",                        # THE FILES BROWSER
             "desk")                             # THE DESKS
 _MAX_QUEUE = 256        # a hidden board must not grow a silent backlog forever
@@ -1669,6 +1669,32 @@ class Handler(SimpleHTTPRequestHandler):
                     ref = ["number", str(dest)] if isinstance(dest, int) else [str(dest)]
                     _i3(f"[con_id={win['cid']}]", "move", "container",
                         "to", "workspace", *ref)
+                    # GIVE IT ROOM (Task 34). The user: "when u are opening
+                    # things for me, it opens along with something (like
+                    # browser or terminal) that is why it opens in half the
+                    # screen size". i3 tiles a new window beside whatever is
+                    # already there, so it gets half a screen — and since a
+                    # desk card now shows the window at LIFE SIZE, half a
+                    # screen is exactly what you see on the glass. Bringing
+                    # a window here floats it at most of the display, which
+                    # is the size it would have had on its own.
+                    #
+                    # Floating, never fullscreen: a fullscreen window makes
+                    # i3 unmap its tiled siblings, and those siblings are
+                    # other windows whose cards would go dead. `send` puts
+                    # it back to tiling.
+                    d2 = config().get("desks", {})
+                    if d2.get("bringBig", True) and a == "bring":
+                        sw, sh = snap.get("screen") or [1920, 1080]
+                        bw = int(sw * float(d2.get("bringW", 0.86)))
+                        bh = int(sh * float(d2.get("bringH", 0.86)))
+                        sel = f"[con_id={win['cid']}]"
+                        _i3(sel, "floating", "enable")
+                        _i3(sel, "resize", "set", str(bw), str(bh))
+                        _i3(sel, "move", "position",
+                            str(max(0, (sw - bw) // 2)), str(max(0, (sh - bh) // 2)))
+                    elif a == "send":
+                        _i3(f"[con_id={win['cid']}]", "floating", "disable")
                     # i3 gives a moved-in window focus-follows semantics
                     # depending on config; the board must not lose the
                     # floating stack position it needs to stay on top, so
